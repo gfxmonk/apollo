@@ -85,8 +85,10 @@
  information directly into semantic tokens (see 'SemanticToken' class,
  below). A good introduction to Pratt parsing for JS is at
  http://javascript.crockford.com/tdop/tdop.html. What Douglas
- Crockford calls 'lbp', 'nud', and 'led', we call 'excbp', 'expsf' and
- 'excf', respectively.
+ Crockford calls 'lbp', 'nud', and 'led', we call
+ 'excbp' (expression continuation binding power),
+ 'exsf' (expression start function) and
+ 'excf' (expression continuation function), respectively.
 
 
  *** PREPROCESSOR FLAGS ***
@@ -820,15 +822,16 @@ function parseVarDecls(pctx, st) {
   var decls = [];
   do {
     if (decls.length) scan(pctx, ",");
-    var id = pctx.token.value;
-    scan(pctx, "<id>");
+    var token = pctx.token;
+    scan(pctx);
+    var lvalue = token.exsf(pctx);
     if (pctx.token.id == "=") {
       scan(pctx);
       var initialiser = parseExp(pctx, BP_COMMA, st);
-      decls.push([id, initialiser]);
+      decls.push([lvalue, initialiser]);
     }
     else
-      decls.push([id]);
+      decls.push([lvalue]);
   } while (pctx.token.id == ",");
   return decls;
 }

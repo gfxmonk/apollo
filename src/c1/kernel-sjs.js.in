@@ -420,15 +420,21 @@ function ph_var_decl(d, pctx) {
   this.d = d;
   this.is_empty = this.d.length<2;
   this.line = pctx.line; //XXX might want to take the line of the decl here
-  if (!this.is_empty)
+  if (!this.is_empty) {
+    this.assignment = new ph_assign_op(d[0], "=", d[1], pctx);
     this.is_nblock = pctx.allow_nblock && d[1].is_nblock;
+  }
 }
 ph_var_decl.prototype = new ph(WHENDEBUG("ph_var_decl"));
 ph_var_decl.prototype.is_var_decl = true;
-ph_var_decl.prototype.decl = function() { return this.d[0]; };
+ph_var_decl.prototype.decl = function() {
+    return this.d[0].exportsToScope().join(",");
+};
 ph_var_decl.prototype.nblock_val = function() {
     assert(!this.is_empty);
-    return this.d[0]+"="+this.d[1].nb()+";";
+    //TODO: use nblock_val() and not val() here.
+    LOG("ASSIGNMENT = " + this.assignment.val());
+    return this.assignment.val();
 };
 ph_var_decl.prototype.val = function() {
     assert(!this.is_empty);
@@ -925,6 +931,7 @@ ph_identifier.prototype.is_id = true;
 ph_identifier.prototype.is_value = true;
 ph_identifier.prototype.nblock_val = function() { return this.value; };
 ph_identifier.prototype.val = function() { return nblock_val_to_val(this.value, true, this.line) };
+ph_identifier.prototype.exportsToScope = function() { return [this.value]; };
 #ifdef SJS_DESTRUCTURE
 ph_identifier.prototype.destruct = function(dpath) {
   return this.value + "=" + dpath + ";";
@@ -1064,6 +1071,7 @@ ph_group.prototype.is_value = true;
 ph_group.prototype.nblock_val = function() { return "("+this.e.nb()+")"; };
 ph_group.prototype.val = function() { return this.e.v(); };
 #ifdef SJS_DESTRUCTURE
+ph_group.prototype.exportsToScope = function() { return this.e.exportsToScope(); };
 ph_group.prototype.destruct = function(dpath,drefs) { return this.e.destruct(dpath,drefs); };
 #endif
 
@@ -1092,6 +1100,16 @@ ph_arr_lit.prototype.val = function() {
     return rv + ")";
 };
 #ifdef SJS_DESTRUCTURE
+ph_arr_lit.prototype.exportsToScope = function() {
+  //XXX implement with map, flatten, etc
+  var exports = [];
+  // recursively collect child exports
+  for(var i=0; i< this.elements.length; i++) {
+    exports = exports.concat(this.elements[i].exportsToScope());
+  }
+  return exports;
+};
+
 ph_arr_lit.prototype.destruct = function(dpath, drefs) {
   var rv = "";
   for (var i=0; i<this.elements.length; ++i) {
@@ -1161,6 +1179,16 @@ ph_obj_lit.prototype.val = function() {
     return rv + ")";
 };
 #ifdef SJS_DESTRUCTURE
+ph_obj_lit.prototype.exportsToScope = function() {
+  //XXX implement with map, flatten, etc
+  var exports = [];
+  // recursively collect child exports
+  for(var i=0; i< this.props.length; i++) {
+    exports = exports.concat(this.props[i].exportsToScope());
+  }
+  return exports;
+};
+
 ph_obj_lit.prototype.destruct = function(dpath, drefs) {
   var rv = ""; 
   for (var i=0; i<this.props.length; ++i) {
