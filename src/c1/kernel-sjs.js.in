@@ -433,7 +433,7 @@ ph_var_decl.prototype.decl = function() {
 ph_var_decl.prototype.nblock_val = function() {
     assert(!this.is_empty);
     //XXX: use .nb() when destructuring is supported there
-    return this.assignment.v() + ";";
+    return this.assignment.nb() + ";";
 };
 ph_var_decl.prototype.val = function() {
     assert(!this.is_empty);
@@ -793,14 +793,35 @@ function ph_assign_op(left, id, right, pctx) {
                    (left.is_nblock && right.is_nblock);
 #else
   this.is_nblock = pctx.allow_nblock && left.is_nblock && right.is_nblock
-#ifdef SJS_DESTRUCTURE
-                   && !this.dest; // XXX do destructuring assignment nb form
-#endif
 #endif
 }
+
 ph_assign_op.prototype = new ph(WHENDEBUG("ph_assign_op"));
 ph_assign_op.prototype.is_value = true;
+ph_assign_op.prototype.destruct_val = function(rhs) {
+  rv = "__oni_rt.Scall("+this.line+",function(_oniX";
+  try {
+    var drefs = [], body = this.left.destruct("_oniX", drefs);
+    for (var i=1; i<=drefs.length; ++i)
+      rv += ",_oniX"+i;
+    rv += "){" + body + "},"+rhs;
+    for (var i=0; i<drefs.length; ++i)
+      rv += ","+drefs[i];
+    rv += ")";
+  }
+  catch (e) {
+    throw { mes:"Invalid left side in destructuring assignment ",
+            line:this.line }; 
+  }
+  return rv;
+};
+
 ph_assign_op.prototype.nblock_val = function() {
+#ifdef SJS_DESTRUCTURE
+  if(this.dest) {
+    return this.destruct_val(this.right.nb());
+  }
+#endif
     return this.left.nb()+this.id+this.right.nb();
 };
 ph_assign_op.prototype.val = function() {
@@ -810,20 +831,7 @@ ph_assign_op.prototype.val = function() {
     }
 #ifdef SJS_DESTRUCTURE
     else if (this.dest) {
-      rv = "__oni_rt.Scall("+this.line+",function(_oniX";
-      try {
-        var drefs = [], body = this.left.destruct("_oniX", drefs);
-        for (var i=1; i<=drefs.length; ++i)
-          rv += ",_oniX"+i;
-        rv += "){" + body + "},"+this.right.v();
-        for (var i=0; i<drefs.length; ++i)
-          rv += ","+drefs[i];
-        rv += ")";
-      }
-      catch (e) {
-        throw { mes:"Invalid left side in destructuring assignment ",
-                line:this.line }; 
-      }
+      rv = this.destruct_val(this.right.v());
     }
 #endif
     else if (!this.left.is_ref || this.left.is_nblock) {
