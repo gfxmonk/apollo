@@ -23,9 +23,11 @@
 // XXX figure out why normal CPP stringification is screwed
 #define assert(X) if(!(X)) { throw new Error("Assertion failed: " + "X" ); }
 #define WHENDEBUG(X) X
+#define LOG(x) console.log(x);
 #else
 #define assert(X)
 #define WHENDEBUG(X)
+#define LOG(x)
 #endif
 
 // THESE FLAGS NEED TO BE KEPT IN SYNC WITH THE NDATA_SEQ_FLAG_'s in vm1.js.in
@@ -142,6 +144,7 @@ function begin_script(pctx) {
     // in non-full-nblock mode, to get linenumber support, we wrap
     // nblocks in __oni_rt.Nb's:
     nblock_val_to_val = function(v,r,l) {
+      LOG("wrapping val " + v + " in a Nb call");
       var rv = "__oni_rt.Nb(function(arguments){";
       if (r) rv += "return ";
       rv += v;
@@ -433,7 +436,8 @@ ph_var_decl.prototype.decl = function() {
 ph_var_decl.prototype.nblock_val = function() {
     assert(!this.is_empty);
     //XXX: use .nb() when destructuring is supported there
-    return this.assignment.nb() + ";";
+    LOG("var_decl assignment nb() == " + this.assignment.nb());
+    return '__oni_rt.ex(' + this.assignment.nb() + ",{file:'_argh'});";
 };
 ph_var_decl.prototype.val = function() {
     assert(!this.is_empty);

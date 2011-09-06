@@ -232,6 +232,9 @@ function execIN(node, env) {
   // as a performance optimization, we allow literals instead of
   // nodes:
   if (typeof node == "function") {
+#ifdef DEBUG_VM
+  LOG('executing function node: ' + node);
+#endif
     try {
       // XXX we really want just 'node(env)' here
       return node.call(env.tobj, env.aobj, env);
@@ -263,6 +266,7 @@ exports.exseq = function(aobj,tobj,file, args) {
 //   returns IN constructor function which returns a instruction object
 function makeINCtor(exec) {
   return function(/* ndata */) {
+    LOG("instruction node " + exec.name + " created with args: " + Array.prototype.slice.call(arguments).map(JSON.stringify).join(', '));
     return {
       exec: exec,
       ndata: arguments,
@@ -298,7 +302,10 @@ function Env(aobj, tobj, file) {
 #define NDATA_NBLOCK_LINENO() ndata[1]
 function I_nblock(ndata, env) {
   try {
-    return (NDATA_NBLOCK_JSFUNC()).call(env.tobj, env.aobj);
+    LOG("calling nb val: " + ndata[0] + " // lineno = " + NDATA_NBLOCK_LINENO());
+    var ret = (NDATA_NBLOCK_JSFUNC()).call(env.tobj, env.aobj);
+    LOG("nb val returned " + ret);
+    return ret;
   }
   catch (e) {
     return new CFException("t", e, NDATA_NBLOCK_LINENO(), env.file);
@@ -348,7 +355,11 @@ setEFProto(EF_Seq.prototype={});
 #ifdef DEBUG_VM
 EF_Seq.prototype.type = "Seq";
 #endif
+
 EF_Seq.prototype.cont = function(idx, val) {
+#ifdef DEBUG_VM
+  LOG('Sequence node executing child frame[' + idx + '] (continuation val=' + val + ')');
+#endif
   if (is_ef(val)) {
     // child frame being replaced:
     this.setChildFrame(val, idx);
@@ -369,6 +380,9 @@ EF_Seq.prototype.cont = function(idx, val) {
         }
       }
       this.child_frame = null; // ensures correct reentrant aborting
+#ifdef DEBUG_VM
+      LOG('Sequence node executing child frame[' + idx + '] (' + this.ndata[idx] + ')');
+#endif
       val = execIN(this.ndata[idx], this.env);
       if (this.aborted) {
         // a reentrant abortion
@@ -436,6 +450,7 @@ function EF_Scall(ndata, env) {
 setEFProto(EF_Scall.prototype={});
 
 EF_Scall.prototype.cont = function(idx, val) {
+  LOG("Scall: cont with idx " + idx + " and val " + val);
   if (is_ef(val)) {
     this.setChildFrame(val, idx);
   }
@@ -460,6 +475,7 @@ EF_Scall.prototype.cont = function(idx, val) {
     }
     
     // alright, we've got the pars, let's do the call:
+    LOG("Scall: executing " + this.NDATA_SCALL_L());
     try {
         rv = this.NDATA_SCALL_L().apply(this.env.tobj, this.pars);
     }
@@ -477,6 +493,7 @@ EF_Scall.prototype.cont = function(idx, val) {
 };
 
 function I_scall(ndata, env) {
+  LOG("I_scall executing!");
   return (new EF_Scall(ndata, env)).cont(0);
 }
 
