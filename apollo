@@ -146,6 +146,7 @@ function main() {
 
 process.on('uncaughtException',function(error){
   console.warn('Uncaught: '+error.toString());
+  console.warn('Stacktrace: '+error.stack);
 })
 
 apollo_node.init(main);
