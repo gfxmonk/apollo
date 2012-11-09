@@ -275,7 +275,7 @@ exports.error = printfn(exports.ERROR,'error');
 
     Example usage:
 
-        using(logging.logContext({level:logging.WARN}) {
+        using(logging.logContext({level:logging.WARN})) {
           // some code that logs too much at INFO level
         }
   @param    {Object} [settings] Settings for the context. Valid keys are `level` and `format`.
