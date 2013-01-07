@@ -88,6 +88,20 @@ if(testUtil.isBrowser) {
     return Template("<div><h1>{t}</h1>{b}</div>").render({t:"title", b: Template("<p>{p}</p>"), p: "body"}).dompeer.outerHTML;
   });
 
+  test("Strict mode throws an error if substitutions are undefined", "Undefined template substitution: foo.bar", function() {
+    try {
+      Template("{foo.bar}").render({}, {strict: true});
+      return "No exception thrown!";
+    }
+  });
+
+  test("Strict mode throws an error if substitutions are undefined", "Undefined template substitution: foo.bar", function() {
+    try {
+      Template({content: "{foo.bar}"}).render({});
+      return "No exception thrown!";
+    }
+  });
+
   // TODO: - non-content (mechanism, class, etc) attributes properly applied to sub-templates?
   //       - copying of various things, make sure things are aliased appropriately
 
