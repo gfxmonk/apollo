@@ -32,6 +32,7 @@ function build_deps() {
                                                   "modules/marked.sjs",
                                                   "modules/dashdash.sjs",
                                                   "tmp/version_stamp",
+                                                  "tools/bundle/c1deps.js",
                                                   "test/unit/dashdash-tests.sjs",
                                                   "test/_index.txt"]);
 
@@ -49,6 +50,9 @@ function build_deps() {
   // stringifier (used by STRINGIFY):
   CPP("tmp/c1jsstr.js", "-DC1_KERNEL_JSMIN -DSTRINGIFY", 
       ["src/c1/c1.js.in", "src/c1/kernel-jsmin.js.in"]); 
+  // deps analyser:
+  CPP("tools/bundle/c1deps.js", "-DC1_KERNEL_DEPS",
+      ["src/c1/c1.js.in", "src/c1/kernel-deps.js.in"]); 
   // SJS compiler:
   CPP("tmp/c1.js", "-DC1_KERNEL_SJS", 
       ["src/c1/c1.js.in", "src/c1/kernel-sjs.js.in"]); 

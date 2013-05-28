@@ -98,6 +98,7 @@
 one of these required:
    #define C1_KERNEL_JS
    #define C1_KERNEL_SJS
+   #define C1_KERNEL_DEPS
    #define C1_KERNEL_JSMIN  : compiles with the given kernel (and sets #define SJS appropriately)
 
 general:
@@ -319,6 +320,20 @@ GEN_QUASI(parts, pctx) with even parts=strings, odd parts=expressions
 #define INTERPOLATING_STRINGS 1
 #define QUASIS 1
 #include "kernel-jsmin.js.in"
+
+#elif defined(C1_KERNEL_DEPS)
+
+#define SJS 1
+#define MULTILINE_STRINGS 1
+#define SJS_USING 1
+#define SJS___JS 1
+#define SJS_DESTRUCTURE 1
+#define SJS_BLOCKLAMBDA 1
+#define SJS_ARROWS 1
+#define SJS_DOUBLEDOT 1
+#define INTERPOLATING_STRINGS 1
+#define QUASIS 1
+#include "kernel-deps.js.in"
 
 #else
 
