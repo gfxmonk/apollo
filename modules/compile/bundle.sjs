@@ -48,23 +48,37 @@ var object = require('sjs:object');
 var assert = require('sjs:assert');
 var logging = require('sjs:logging');
 
-function findDependencies(seeds, settings) {
+function findDependencies(sources, settings) {
   var deps = {};
-  var rewrites = settings.rewrites || [];
+  var aliases = settings.aliases || [];
+  var hubs = settings.hubs || [];
   var strict = settings.strict !== false; // true by default
-  logging.verbose("rewrites:", rewrites);
+  logging.verbose("aliases:", aliases);
 
   var getId = function(id) {
-    rewrites .. each {|[alias, path]|
+    aliases .. each {|[alias, path]|
       logging.debug("checking if #{id} startswith #{path}");
       if (id .. str.startsWith(path)) {
-        logging.debug("yes!");
         return alias + id.substr(path.length);
       }
     }
-    if ('://' in id) return id;
-    throw new Error("No module ID found for #{path}");
+    if (id .. str.contains('://')) return id;
+    throw new Error("No module ID found for #{id}");
     return null;
+  }
+
+  var resolveHubs = function(requireName, depth) {
+    if (depth === undefined) depth = 0;
+    if (depth > 10) throw new Error("Too much hub indirection");
+    hubs .. each {|[alias, path]|
+      logging.debug("checking if #{requireName} startswith #{alias}");
+      if (requireName .. str.startsWith(alias)) {
+        var resolved = path + (requireName.substr(alias.length));
+        logging.verbose("resolved #{requireName} -> #{resolved}");
+        return resolveHubs(resolved, depth+1);
+      }
+    }
+    return requireName;
   }
 
   function addRequire(requireName, parent) {
@@ -81,28 +95,31 @@ function findDependencies(seeds, settings) {
     var src;
     var resolved;
 
+    requireName = resolveHubs(requireName);
+
     if (! (requireName .. str.contains(":"))) {
       requireName = url.normalize(requireName, parent.path);
-      logging.debug("-> " + requireName);
+      logging.debug("normalized to " + requireName);
     }
 
     try {
       resolved = require.resolve(requireName);
+      logging.verbose("Resolved: ", resolved);
     } catch (e) {
       throw new Error("Error resolving " + requireName + ":\n" + e);
     }
 
-    if (parent) parent.deps.push(resolved.path);
+    if (parent && parent.deps) parent.deps.push(resolved.path);
+
+    if (deps.hasOwnProperty(resolved.path)) {
+      logging.debug("(already processed)");
+      return;
+    }
+    module.path = resolved.path;
+    module.id = getId(resolved.path);
+    deps[module.path] = module;
 
     try {
-      if (deps.hasOwnProperty(resolved.path)) {
-        logging.debug("(already processed)");
-        return;
-      }
-      module.path = resolved.path;
-      module.id = getId(resolved.path);
-      deps[module.path] = module;
-
       src = resolved.src(resolved.path).src;
     } catch (e) {
       throw new Error("Error loading " + resolved.path + ":\n" + e);
@@ -132,8 +149,12 @@ function findDependencies(seeds, settings) {
     addRequire = relax(addRequire);
   }
 
-  seeds .. seq.map(p -> url.fileURL(p)) .. seq.each {|mod|
-    addRequire(mod);
+  var root = {
+    path: (require('nodejs:path').normalize(process.cwd()) .. url.fileURL) + "/",
+  };
+  logging.debug("ROOT:", root);
+  sources .. each {|mod|
+    addRequire(mod, root);
   }
 
   return deps;
@@ -173,6 +194,7 @@ function generateBundle(deps, path, settings) {
 
       var contents = fs.readFile(dep.path .. url.toPath).toString();
       var initialSize = contents.length;
+      logging.verbose("Compiling: #{dep.path}");
       contents = stringifier.compile(contents);
       var minifiedSize = contents.length;
       var percentage = ((minifiedSize/initialSize) * 100).toFixed(2);
@@ -194,16 +216,24 @@ function generateBundle(deps, path, settings) {
 }
 
 exports.main = function(opts) {
-  var rewrites = (opts.alias || []) .. map(function(alias) {
-    var parts = alias.split('=');
-    assert.ok(parts.length > 1, "invalid alias: #{alias}");
-    var alias = parts .. seq.at(-1);
-    var path = parts.slice(0, -1).join("=");
+  var expandPath = function(path) {
     if (!(path .. str.contains(':'))) {
+      logging.debug("normalizing path: #{path}");
       path = (require('nodejs:path').normalize(path) .. url.fileURL());
-      if (alias .. str.endsWith('/')) path += "/";
     }
-    return [alias, path];
+    return path;
+  }
+
+  var aliases = (opts.alias || []) .. map(function(spec) {
+    var [path, alias] = spec .. str.rsplit('=');
+    assert.ok(alias, "invalid alias: #{spec}");
+    return [alias, expandPath(path)];
+  }) .. toArray;
+
+  var hubs = (opts.hub || []) .. map(function(spec) {
+    var [prefix, path] = spec .. str.split('=');
+    assert.ok(path, "invalid hub: #{spec}");
+    return [prefix, expandPath(path)];
   }) .. toArray;
 
   var commonSettings = {
@@ -211,7 +241,8 @@ exports.main = function(opts) {
   };
 
   var deps = findDependencies(opts.sources, commonSettings .. object.merge({
-    rewrites: rewrites,
+    aliases: aliases,
+    hubs: hubs,
   }));
 
   if (opts.bundle) {
@@ -229,6 +260,11 @@ if (require.main === module) {
         names: ['help','h'],
         help: 'Print this help',
         type: 'bool',
+      },
+      {
+        names: ['verbose','v'],
+        help: 'Increase log level',
+        type: 'arrayOfBool',
       },
       {
         name: 'alias',
@@ -280,6 +316,10 @@ if (require.main === module) {
   if (opts.help) {
     process.stderr.write(parser.help());
     process.exit(0);
+  }
+
+  if (opts.verbose) {
+    logging.setLevel(logging.getLevel() + (opts.verbose.length * 10));
   }
   
   opts.sources = opts._args;
