@@ -39,6 +39,7 @@
         // all modules addressed as sjs:' will now be loaded from
         // the location above.
     
+@dir compile  SJS compilation utilities
 @dir nodejs   NodeJS-related modules
 @dir rpc      Remote Procedure Calling Support
 @dir surface  Lightweight cross-browser UI toolkit
