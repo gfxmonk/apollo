@@ -152,7 +152,7 @@ function quasi(parts) {
   var rv = '`';
   for (var i=0,l=parts.length;i<l;++i) {
     if (i % 2)
-      rv += '#{'+parts[i]+'}';
+      rv += '${'+parts[i]+'}';
     else {
       rv += parts[i].replace(/\\/g,"\\\\").replace(/'/g,"\\'").replace(/"/g,'\\"');
     }

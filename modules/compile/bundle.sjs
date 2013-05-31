@@ -211,7 +211,7 @@ function generateBundle(deps, path, settings) {
 
       var initialSize = contents.length;
       logging.verbose("Compiling: #{dep.path}");
-      contents = stringifier.compile(contents);
+      contents = stringifier.compile(contents, {keeplines: true});
       var minifiedSize = contents.length;
       var percentage = ((minifiedSize/initialSize) * 100).toFixed(2);
       logging.info("Bundled #{id} [#{percentage}%]");
