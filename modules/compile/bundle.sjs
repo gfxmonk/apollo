@@ -40,7 +40,6 @@
 var compiler = require('./deps.js');
 
 var fs = require('sjs:nodejs/fs');
-var nodePath = require('nodejs:path');
 var url = require('sjs:url');
 var seq = require('sjs:sequence');
 var {each, toArray, map} = seq;
@@ -49,10 +48,21 @@ var object = require('sjs:object');
 var assert = require('sjs:assert');
 var logging = require('sjs:logging');
 
+var shouldExcude = function(path, bases) {
+  return bases .. seq.any(function(ex) {
+    if (path .. str.startsWith(ex)) {
+      logging.verbose("Excluding: #{path}");
+      return true;
+    }
+    return false;
+  });
+}
+
 function findDependencies(sources, settings) {
   var deps = {};
   var aliases = settings.aliases || [];
   var hubs = settings.hubs || [];
+  var excludes = (settings.ignore || []).concat(['builtin:']);
   var strict = settings.strict !== false; // true by default
   logging.verbose("aliases:", aliases);
 
@@ -81,11 +91,10 @@ function findDependencies(sources, settings) {
     return requireName;
   }
 
+
   function addRequire(requireName, parent) {
-    if (requireName .. str.startsWith("builtin:")) {
-      // ignore
-      return;
-    }
+    if (shouldExcude(requireName, excludes)) return;
+
     logging.verbose("Processing: " + requireName);
     var module = {
       deps: [],
@@ -95,13 +104,16 @@ function findDependencies(sources, settings) {
     var src;
     var resolved;
 
+    // resolve relative require names & configured hubs
     requireName = resolveHubs(requireName);
-
     if (! (requireName .. str.contains(":"))) {
       requireName = url.normalize(requireName, parent.path);
       logging.debug("normalized to " + requireName);
     }
+    if (shouldExcude(requireName, excludes)) return;
 
+
+    // resolve with builtin hubs
     try {
       resolved = require.resolve(requireName);
       logging.verbose("Resolved: ", resolved);
@@ -109,6 +121,7 @@ function findDependencies(sources, settings) {
       throw new Error("Error resolving " + requireName + ":\n" + e);
     }
 
+    if (shouldExcude(requireName, excludes)) return;
     if (parent && parent.deps) parent.deps.push(resolved.path);
 
     if (deps.hasOwnProperty(resolved.path)) {
@@ -147,7 +160,7 @@ function findDependencies(sources, settings) {
   }
 
   var root = {
-    path: (nodePath.normalize(process.cwd()) .. url.fileURL) + "/",
+    path: url.fileURL(process.cwd()) + "/",
   };
   logging.debug("ROOT:", root);
   sources .. each {|mod|
@@ -169,8 +182,11 @@ var relax = function(fn) {
 }
 
 function generateBundle(deps, path, settings) {
-  var strict = settings.strict !== false; // true by default
   var stringifier = require('./stringify.js');
+
+  var strict = settings.strict !== false; // true by default
+  var excludes = (settings.exclude || []);
+
   using (var output = fs.open(path, 'w')) {
     var {Buffer} = require('nodejs:buffer');
     var write = function(data) {
@@ -183,13 +199,16 @@ function generateBundle(deps, path, settings) {
     write("var o = document.location.origin, b=__oni_rt_bundle;");
 
     var addPath = function(path) {
+      if (shouldExcude(path, excludes)) return;
       var dep = deps[path];
       var id = dep.id;
       if (!id) {
         throw new Error("No ID for #{dep.path}");
       }
 
-      var contents = fs.readFile(dep.path .. url.toPath).toString();
+      var resolved = require.resolve(dep.path);
+      var contents = resolved.src(dep.path).src;
+
       var initialSize = contents.length;
       logging.verbose("Compiling: #{dep.path}");
       contents = stringifier.compile(contents);
@@ -216,7 +235,7 @@ exports.main = function(opts) {
   var expandPath = function(path) {
     if (!(path .. str.contains(':'))) {
       logging.debug("normalizing path: #{path}");
-      path = (nodePath.normalize(path) .. url.fileURL());
+      path = url.fileURL(path);
       logging.debug("-> #{path}");
     }
     return path;
@@ -234,6 +253,9 @@ exports.main = function(opts) {
     return [prefix, expandPath(path)];
   }) .. toArray;
 
+  var ignore = (opts.ignore || []) .. map(expandPath) .. toArray;
+  var exclude = (opts.exclude || []) .. map(expandPath) .. toArray;
+
   var commonSettings = {
     strict: !opts.skip_failed,
   };
@@ -241,10 +263,12 @@ exports.main = function(opts) {
   var deps = findDependencies(opts.sources, commonSettings .. object.merge({
     aliases: aliases,
     hubs: hubs,
+    ignore: ignore,
   }));
 
   if (opts.bundle) {
     generateBundle(deps, opts.bundle, commonSettings .. object.merge({
+      exclude: exclude,
     }));
   }
 
@@ -305,6 +329,18 @@ if (require.main === module) {
         name: 'skip-failed',
         type: 'bool',
         help: "skip any modules that can't be resolved / loaded, instead of failing",
+      },
+      {
+        name: 'ignore',
+        type: 'arrayOfString',
+        helpArg : 'BASE',
+        help: "ignore all modules under BASE",
+      },
+      {
+        name: 'exclude',
+        type: 'arrayOfString',
+        helpArg : 'BASE',
+        help: "exclude modules under BASE from bundle output (they are still parsed for dependencies, but omitted from the bundle. Use --ignore to skip modules entirely)",
       },
     ]
   });
