@@ -40,6 +40,7 @@
 var compiler = require('./deps.js');
 
 var fs = require('sjs:nodejs/fs');
+var nodePath = require('nodejs:path');
 var url = require('sjs:url');
 var seq = require('sjs:sequence');
 var {each, toArray, map} = seq;
@@ -62,9 +63,8 @@ function findDependencies(sources, settings) {
         return alias + id.substr(path.length);
       }
     }
-    if (id .. str.contains('://')) return id;
-    throw new Error("No module ID found for #{id}");
-    return null;
+    if (!(id .. str.startsWith('file://'))) return id;
+    throw new Error("No module ID found for #{id} (missing an alias?)");
   }
 
   var resolveHubs = function(requireName, depth) {
@@ -138,9 +138,6 @@ function findDependencies(sources, settings) {
         case "require":
           addRequire(args[0], module);
           break;
-        default:
-          console.log("TODO: " + name);
-          break;
       }
     }
   }
@@ -150,7 +147,7 @@ function findDependencies(sources, settings) {
   }
 
   var root = {
-    path: (require('nodejs:path').normalize(process.cwd()) .. url.fileURL) + "/",
+    path: (nodePath.normalize(process.cwd()) .. url.fileURL) + "/",
   };
   logging.debug("ROOT:", root);
   sources .. each {|mod|
@@ -219,7 +216,8 @@ exports.main = function(opts) {
   var expandPath = function(path) {
     if (!(path .. str.contains(':'))) {
       logging.debug("normalizing path: #{path}");
-      path = (require('nodejs:path').normalize(path) .. url.fileURL());
+      path = (nodePath.normalize(path) .. url.fileURL());
+      logging.debug("-> #{path}");
     }
     return path;
   }
@@ -272,7 +270,7 @@ if (require.main === module) {
         help: (
           'Set the runtime URL (or server path) for an on-disk location, e.g: ' +
           '--alias=components=/static/sjs/components ' +
-          '--alias=/usr/lib/nodejs/apollo/modules=http://example.org/myapp/apollo ' +
+          '--alias=/lib/nodejs/apollo=http://example.org/apollo ' +
           "NOTE: The URLs used here must match the URLs used by your running application, " +
           "otherwise the bundled version will be ignored."
         ),
