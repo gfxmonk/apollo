@@ -1,7 +1,4 @@
-@lib     Oni Apollo 'unstable' Standard Module Library - Compile Utilities
+@lib     Oni Apollo 'unstable' Standard Module Library - Compilation Utilities
 @summary SJS compilation utilities
-@desc
-    This module exposes the internals of the SJS compiler.
-    The modules in this directory should all be considered unstable.
 
-@module bundle     Create SJS code bundles
+@module bundle        Create SJS code bundles

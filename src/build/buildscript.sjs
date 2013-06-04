@@ -20,10 +20,10 @@ function build_deps() {
   // top-level targets:
 
   PSEUDO("clean");
-  BUILD("clean", ["rm -rf tmp", function() { log('all done')}]); 
+  BUILD("clean", ["rm -rf tmp && rm -f modules/compile/*.js", function() { log('all done')}]); 
 
   PSEUDO("build");
-  BUILD("build", function() { log('all done') }, ["oni-apollo.js", 
+  BUILD("build", function() { log('all done') }, ["oni-apollo.js",
                                                   "oni-apollo-node.js",
                                                   "modules/numeric.sjs",
                                                   "modules/sjcl.sjs",
@@ -33,6 +33,7 @@ function build_deps() {
                                                   "modules/dashdash.sjs",
                                                   "tmp/version_stamp",
                                                   "modules/compile/deps.js",
+                                                  "modules/compile/minify.js",
                                                   "modules/compile/stringify.js",
                                                   "test/unit/dashdash-tests.sjs",
                                                   "test/_index.txt"]);
@@ -46,18 +47,18 @@ function build_deps() {
   // c1
 
   // minifier (used by MINIFY):
-  CPP("tmp/c1jsmin.js", "-DC1_KERNEL_JSMIN",  
-      ["src/c1/c1.js.in", "src/c1/kernel-jsmin.js.in"]); 
+  CPP("modules/compile/minify.js", "-DC1_KERNEL_JSMIN",
+      ["src/c1/c1.js.in", "src/c1/kernel-jsmin.js.in"]);
   // stringifier (used by STRINGIFY):
-  CPP("modules/compile/stringify.js", "-DC1_KERNEL_JSMIN -DSTRINGIFY", 
-      ["src/c1/c1.js.in", "src/c1/kernel-jsmin.js.in"]); 
+  CPP("modules/compile/stringify.js", "-DC1_KERNEL_JSMIN -DSTRINGIFY",
+      ["src/c1/c1.js.in", "src/c1/kernel-jsmin.js.in"]);
   // deps analyser:
-  CPP("modules/compile/deps.js", "-DC1_KERNEL_DEPS",
-      ["src/c1/c1.js.in", "src/c1/kernel-deps.js.in"]); 
+  CPP("modules/compile/requires.js", "-DC1_KERNEL_DEPS",
+      ["src/c1/c1.js.in", "src/c1/kernel-deps.js.in"]);
   // SJS compiler:
-  CPP("tmp/c1.js", "-DC1_KERNEL_SJS", 
-      ["src/c1/c1.js.in", "src/c1/kernel-sjs.js.in"]); 
-  MINIFY("tmp/c1.js.min", "tmp/c1.js", 
+  CPP("tmp/c1.js", "-DC1_KERNEL_SJS",
+      ["src/c1/c1.js.in", "src/c1/kernel-sjs.js.in"]);
+  MINIFY("tmp/c1.js.min", "tmp/c1.js",
          { pre: "(function(exports){", post: "})(__oni_rt.c1={});" });
 
   //----------------------------------------------------------------------
@@ -327,7 +328,7 @@ function MINIFY(target, source, flags) {
       if (process.env['APOLLO_MINIFY'] == 'false') {
         var out = src;
       } else {
-        var c = require('../../tmp/c1jsmin.js');
+        var c = require('../../modules/compile/minify.js');
         var out = c.compile(src, flags);
       }
       var pre = flags.pre || "";
@@ -335,7 +336,7 @@ function MINIFY(target, source, flags) {
       fs.writeFile(target, pre + out + post);
       return target;
     },
-    [source, "tmp/c1jsmin.js"]);
+    [source, "modules/compile/minify.js"]);
 }
 
 function STRINGIFY(target, source, flags) {
@@ -352,7 +353,7 @@ function STRINGIFY(target, source, flags) {
       fs.writeFile(target, pre + out + post);
       return target;
     },
-    [source, "tmp/c1jsstr.js"]);
+    [source, "modules/compile/stringify.js"]);
 }
 
 // CPP: run C preprocessor

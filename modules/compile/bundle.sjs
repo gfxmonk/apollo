@@ -34,8 +34,58 @@
   @module  compile/bundle
   @summary Create SJS code bundles
   @home    sjs:compile/bundle
+  @hostenv nodejs
+  @desc
+    StratifiedJS' module system encourages you to break your code into
+    individual modules. This is good for code maintainability, but can
+    slow the load time of an application that uses many modules if each
+    module is requested serially over a HTTP connection with high latency.
+
+    The bundle module provides a way to package up all the modules your
+    application needs into a single javascript file. This reduces the
+    number of requests made while loading your application, and allows the
+    module sources to be downloaded in parallel with the SJS runtime itself.
+    It also strips comments from source code, to reduce file size.
+
+    **Note**: since SJS code is dynamic, it is impossible to fully determine
+    which modules your application imports. The dependency resolver will
+    *only* include modules that it can statically determine will *always* be
+    used - this generally only covers `require("moduleName")` statements
+    at the top-level of your module. For dynamically-required modules that you
+    want to include in your bundle, you will need to explicitly include them
+    as inputs to the bundle.
+
+    This module can be imported from SJS code, but it can also be directly
+    invoked from the command line by running e.g:
+
+        apollo sjs:compile/bundle --help
+
+    Although multiple functions are exported from this module, most users
+    will only need to use [::create].
+    
+
+    ### Using bundles
+
+    To use a module bundle, add it like any other javascript file in
+    your HTML header:
+    
+        <script src="/bundle.js"></script>
+
+    Once the bundle has been downloaded by your browser,
+    require(moduleName) will load `moduleName` from the bundle,
+    rather than requesting the module file over HTTP. Normally you
+    should place this file before `oni-apollo.js`, so that the
+    bundled modules will be ready by the time your inline SJS is
+    executed.
+
+    Any modules not present in the bundle will be loaded in the usual
+    way over HTTP - the bundle is just a cache to speed things up.
+
+    You can include multiple bundle files in a single HTML document,
+    for example to use one bundle for your third-party dependencies
+    and another bundle for just your application code. Bundles will
+    add to the existing set of cached module sources.
 */
-//TODO (tjc): document
 
 var compiler = require('./deps.js');
 
@@ -58,6 +108,17 @@ var shouldExcude = function(path, bases) {
   });
 }
 
+/**
+  @function findDependencies
+  @summary scan source modules for static dependencies
+  @param {Array} [sources] Module paths (array of strings)
+  @param {Settings} [settings]
+  @return {Object}
+  @desc
+    Returns a structure suitable for passing to [::writeBundle].
+    
+    Most code should not need to use this function directly - see [::create].
+*/
 function findDependencies(sources, settings) {
   var deps = {};
   var aliases = settings.aliases || [];
@@ -169,6 +230,7 @@ function findDependencies(sources, settings) {
 
   return deps;
 }
+exports.findDependencies = findDependencies;
 
 var relax = function(fn) {
   // wraps `fn`, but turns exceptions into warnings
@@ -181,7 +243,18 @@ var relax = function(fn) {
   }
 }
 
-function generateBundle(deps, path, settings) {
+/**
+  @function writeBundle
+  @summary generate a .js bundle file from the given module sources
+  @param {Object} [deps] The result of [::findDependencies]
+  @param {String} [path] The output path
+  @param {Settings} [settings]
+  @desc
+    Creates a bundle file from the given set of module sources.
+    
+    Most code should not need to use this function directly - see [::create].
+*/
+function writeBundle(deps, path, settings) {
   var stringifier = require('./stringify.js');
 
   var strict = settings.strict !== false; // true by default
@@ -230,8 +303,46 @@ function generateBundle(deps, path, settings) {
   }
   logging.info("wrote #{path}");
 }
+exports.writeBundle = writeBundle;
 
-exports.main = function(opts) {
+/**
+  @function create
+  @summary Generate a module bundle from the given sources (including dependencies)
+  @param {Settings} [settings]
+  @setting {Array} [alias] Array of alias strings
+  @setting {Array} [hub] Array of hub strings
+  @setting {String} [bundle] File path of bundle file to write
+  @setting {Bool} [skip_failed] Skip modules that can't be resolved / loaded
+  @setting {Array} [ignore] Array of ignored paths (to skip entirely)
+  @setting {Array} [exclude] Array of excluded paths (will be processed, but omitted from bundle)
+  @desc
+    The settings provided to this function match the options given
+    to this module when run from the command line.
+
+    Run `apollo sjs:compile/bundle --help` to see a full
+    description of what these options do.
+
+    ### Example:
+
+        bundle.create({
+          bundle:"bundle.js",
+          alias: [
+            # the current working directory corresponds to /static when running in a browser
+            "./=/static"
+          ],
+          hub: [
+            # the dependency analyser should look for "lib:foo" under "components/foo"
+            "lib:=components/"
+          ],
+          sources: [
+            "app/main.sjs",
+            "sjs:sequence"
+          ]
+        });
+
+        // wrote "bundle.js"
+*/
+exports.create = function(opts) {
   var expandPath = function(path) {
     if (!(path .. str.contains(':'))) {
       logging.debug("normalizing path: #{path}");
@@ -267,7 +378,7 @@ exports.main = function(opts) {
   }));
 
   if (opts.bundle) {
-    generateBundle(deps, opts.bundle, commonSettings .. object.merge({
+    writeBundle(deps, opts.bundle, commonSettings .. object.merge({
       exclude: exclude,
     }));
   }
@@ -367,7 +478,7 @@ if (require.main === module) {
     process.exit(1);
   }
 
-  var deps = exports.main(opts);
+  var deps = exports.create(opts);
 
   if (opts.dump) {
     console.log(JSON.stringify(deps, null, '  '));
