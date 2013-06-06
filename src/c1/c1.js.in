@@ -321,6 +321,35 @@ GEN_QUASI(parts, pctx) with even parts=strings, odd parts=expressions
 #define QUASIS 1
 #include "kernel-jsmin.js.in"
 
+#ifdef STRINGIFY
+/**
+   @module  compile/stringify
+   @summary SJS source code stringifier
+   @home    sjs:compile/stringify
+ 
+   @function compile
+   @summary  Minify a string of SJS source code into a javascript string literal
+   @param    {String} [src]
+   @param    {optional Object} [settings]
+   @setting  {Boolean} [keeplines] Maintain line numbers
+   @return   {String} Minified SJS as a string literal
+*/
+#else // !STRINGIFY
+/**
+   @module  compile/minify
+   @summary SJS source code minifier
+   @home    sjs:compile/minify
+
+   @function compile
+   @summary  Minify a string of SJS source code
+   @param    {String} [src]
+   @param    {optional Object} [settings]
+   @setting  {Boolean} [keeplines] Maintain line numbers
+   @return   {String} Minified SJS
+*/
+#endif // STRINGIFY
+
+
 #elif defined(C1_KERNEL_DEPS)
 
 #define SJS 1
@@ -1689,18 +1718,7 @@ function makeParserContext(src, settings) {
   return ctx;
 }
 
-/**
-   @function compile
-   @summary  main entry point into parsing api
-   @param    {String} [src]
-   @param    {optional Object} [settings] Hash of settings
-   @desc     
-      * Return value depends on compilation kernel
-      * In case of compilation error an exception will be thrown with an
-        object-type attribute `compileError` containing the following fields:
-          - message : Error string
-          - line    : Line number where error occurred
-*/
+
 function compile(src, settings) {
   // XXX The regexps of our lexer currently assume that there is never
   // a '//' comment on the last line of the source text. This will

@@ -2,6 +2,6 @@
 @summary SJS compilation utilities
 
 @module bundle        Create SJS code bundles
-@module minify        Minify SJS to SJS
-@module sjs           Compile SJS to Javascript
-@module stringify     Minify SJS to Javascript string literals
+@module minify        SJS source code minifier
+@module sjs           SJS Compiler
+@module stringify     SJS source code stringifier

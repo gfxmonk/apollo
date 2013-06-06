@@ -1,13 +1,309 @@
 __js {
+/*
+ * C1 Stratified JavaScript parser 
+ *
+ * Part of Oni Apollo
+ * http://onilabs.com/apollo
+ *
+ * (c) 2011 Oni Labs, http://onilabs.com
+ *
+ * This file is licensed under the terms of the GPL v2, see
+ * http://www.gnu.org/licenses/gpl-2.0.html
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ *
+ */
+
+/*
+
+ *** OVERVIEW ***
+
+ This parser needs to be preprocessed with CPP (the C preprocessor)
+ and a 'kernel' file to yield a full compiler. There are currently
+ three kernels, each implementing a different compiler:
+ 
+  kernel-js.js.in    : plain JS compiler (just for sanity checking)
+  kernel-jsmin.js.in : JS/SJS minifier/stringifier
+  kernel-sjs.js.in   : SJS compiler (targetting apollo vm)
+
+ Which kernel file is included is determined by preprocessor flags;
+ see below.
+
+ For each JS construct, the parser makes a macro call, e.g. GEN_WHILE
+ for a 'while' statement. The actual macro implementations are in the
+ kernel files - see the full list of macros that kernel files need to
+ implement below.
+
+ This somewhat weird arrangement is so that we can build different
+ compilers from the same parser source, but we don't have to build a
+ generic AST. A generic AST (like e.g. Narcissus produces it) needs to
+ be retraversed to do something useful with it, whereas with the macro
+ approach we can perform syntax-directed translation tasks at the same
+ time as parsing the source. We could use function calls instead of
+ macros, but macros lead to smaller source and faster compilers.
+
+ Most of the macros are expected to return a "parse value" for the
+ given construct (this can be a syntax tree node, a string, nothing,
+ or whatever). The parser feeds the parse values of expressions to the
+ enclosing expression. The ultimate result of the compilation is
+ whatever END_SCRIPT() returns. E.g. the following program:
+
+  1 + 2
+
+ would generate something like the following sequence of macro calls:
+
+  BEGIN_SCRIPT(context)
+  GEN_LITERAL("number", "1", ctx) // remember return value as 'A'
+  GEN_LITERAL("number", "2", ctx) // remember return value as 'B'
+  GEN_INFIX_OP(A, '+', B, ctx) // remember return value as 'C'
+  GEN_EXP_STMT(C, ctx) // remember return value as 'D'
+  ADD_SCRIPT_STMT(D, ctx)
+  END_SCRIPT(ctx) // return value is the result of compilation
+
+ The best way to understand how the macros fit together is to look at
+ kernel-js.js.in.
+
+ * INTERNALS
+
+ As a parsing technique, we first tokenize the stream using two big
+ context-sensitve regular expressions (TOKENIZER_SA and
+ TOKENIZER_OP). The tokenizer switches between these two, depending on
+ whether we're in a 'statement/argument' position, or in an 'operator'
+ position - this is required because in JavaScript certain constructs
+ have different meanings in different contexts. E.g. a '/' can be the
+ start of a regular expression (in a "statement/argument" position) or
+ a division operator (in an "operator position").
+
+ Next, we use the "Pratt parsing technique"
+ (http://en.wikipedia.org/wiki/Pratt_parser). This is a version of
+ recursive descent parsing where we encode operator precedence
+ information directly into semantic tokens (see 'SemanticToken' class,
+ below). A good introduction to Pratt parsing for JS is at
+ http://javascript.crockford.com/tdop/tdop.html. What Douglas
+ Crockford calls 'lbp', 'nud', and 'led', we call 
+ 'excbp' (expression continuation binding power), 
+ 'expsf' (expression start function) and
+ 'excf'  (expression continuation function), respectively.
 
 
+ *** PREPROCESSOR FLAGS ***
+
+(These flags are also valid in kernel files)
+
+one of these required:
+   #define C1_KERNEL_JS
+   #define C1_KERNEL_SJS
+   #define C1_KERNEL_DEPS
+   #define C1_KERNEL_JSMIN  : compiles with the given kernel (and sets #define SJS appropriately)
+
+general:
+   #define DEBUG_C1 : c1 debugging
+   #define VERBOSE_COMPILE_ERRORS : extra detail on compile errors (only interesting when debugging c1)
+   #define ECMA_GETTERS_SETTERS : allow ecma-style getters/setters
+   #define SJS : parse core SJS statements (set below)
+   #define MULTILINE_STRINGS : allow strings to include newlines; map to '\n' (set below)
+   #define SJS_USING: parse SJS's "using" keyword
+   #define SJS___JS: parse SJS's "__js" keyword
+   #define SJS_DESTRUCTURE: allow destructuring assignments (see http://wiki.ecmascript.org/doku.php?id=harmony:destructuring)
+   #define SJS_BLOCKLAMBDA: allow block lambdas (see http://wiki.ecmascript.org/doku.php?id=strawman:block_lambda_revival)
+   #define SJS_ARROWS: allow arrays (fat & thin) (see http://wiki.ecmascript.org/doku.php?id=harmony:arrow_function_syntax ; coffeescript)
+   #define SJS_DOUBLEDOT: allow double dot call syntax
+   #define INTERPOLATING_STRINGS: allow strings with ruby-like interpolation
+   #define QUASIS: allow quasi templates (`foo#{bar}baz`)
+   #define METHOD_DEFINITIONS: allows methods on objects to be specified like { a (pars) { body } }
+
+for C1_KERNEL_JSMIN:
+   #define STRINGIFY  : encodes minified js/sjs as a string.
+
+for C1_KERNEL_SJS:  OBSOLETE! VERBOSE EXCEPTIONS ARE ALWAYS USED NOW, NOT
+                    PREDICATED ON THIS FLAG ANYMORE
+   #define VERBOSE_EXCEPTIONS: add lineNumber/fileName info to VM nodes.
+   
+*/
+/* #define DEBUG_C1 1 */
+
+/*
+
+ *** MACROS TO BE IMPLEMENTED BY KERNEL FILES ***
+
+Misc:
+=====
+
+HANDLE_NEWLINES(n, pctx)
+  Note: only called for newlines outside of ml-strings!
+  
+Contexts:
+=========
+
+BEGIN_SCRIPT(pctx)
+ADD_SCRIPT_STMT(stmt, pctx)
+END_SCRIPT(pctx)
+
+BEGIN_FBODY(pctx , implicit_return)
+ADD_FBODY_STMT(stmt, pctx)
+END_FBODY(pctx , implicit_return)
+   'implicit_return' is a flag to indicate whether the function should return
+   the value of its last expression. It is only meaningful when 
+   'METHOD_DEFINITIONS' is turned on.
+
+BEGIN_BLOCK(pctx)
+ADD_BLOCK_STMT(stmt, pctx)
+END_BLOCK(pctx)
+
+BEGIN_CASE_CLAUSE(cexp, pctx)
+ADD_CASE_CLAUSE_STMT(stmt, pctx)
+END_CASE_CLAUSE(pctx)
+
+- called for do-while/while/for/for-in bodies:
+BEGIN_LOOP_SCOPE(pctx)
+END_LOOP_SCOPE(pctx)
+
+- called for switch bodies:
+BEGIN_SWITCH_SCOPE(pctx)
+END_SWITCH_SCOPE(pctx)
+
+- if #defined SJS_BLOCKLAMBDA is set:
+BEGIN_BLAMBDABODY(pctx)
+ADD_BLAMBDABODY_STMT(stmt, pctx)
+END_BLAMBDABODY(pctx)
+
+Statements:
+===========
+
+GEN_EMPTY_STMT(pctx)
+GEN_EXP_STMT(exp, pctx)
+GEN_LBL_STMT(lbl, stmt, pctx)
+GEN_FUN_DECL(fname, pars, body, pctx)
+GEN_VAR_DECL(decls, pctx)
+  decls = array of decl
+  decl = [id_or_pattern, optional initializer]
+GEN_IF(test, consequent, alternative, pctx)
+GEN_DO_WHILE(body, test, pctx)
+GEN_WHILE(test, body, pctx)
+GEN_FOR(init_exp, decls, test_exp, inc_exp, body, pctx)
+GEN_FOR_IN(lhs_exp, decl, obj_exp, body, pctx)
+GEN_CONTINUE(lbl, pctx)
+GEN_BREAK(lbl, pctx)
+GEN_RETURN(exp, pctx)
+GEN_WITH(exp, body, pctx)
+GEN_SWITCH(exp, clauses, pctx)
+GEN_THROW(exp, pctx)
+GEN_TRY(block, crf, pctx)
+    crf is [ [catch_id,catch_block,catchall?]|null, null, finally_block|null ]
+    (ammended for SJS, see below)
+
+Expressions:
+============
+
+GEN_INFIX_OP(left, id, right, pctx)
+  id: + - * / % << >> >>> < > <= >= == != === !== & ^ | && || ,
+      instanceof in
+GEN_ASSIGN_OP(left, id, right, pctx)
+  id: = *= /= %= += -= <<= >>= >>>= &= ^= |=
+GEN_PREFIX_OP(id, right, pctx)
+  id: ++ -- delete void typeof + - ~ ! (for SJS also: 'spawn')
+GEN_POSTFIX_OP(left, id, pctx)
+  id: ++ --
+GEN_LITERAL(type, value, pctx)
+GEN_IDENTIFIER(name, pctx)
+GEN_OBJ_LIT(props, pctx)
+  props : array of ["prop", string|id, val]
+          if ECMA_GETTERS_SETTERS is defined, also:
+                   ["get", string|id, function_body]
+                   ["set", string|id, id, function_body]
+          if SJS_DESTRUCTURE is defined, also: (destructure pattern)
+                   ["pat", string|id, line]
+          if METHOD_DEFINITIONS is defined, also:
+                   ["method", string|id, function]
+GEN_ARR_LIT(elements, pctx)
+GEN_ELISION(pctx)
+GEN_DOT_ACCESSOR(l, name, pctx)
+GEN_NEW(exp, args, pctx)
+GEN_IDX_ACCESSOR(l, idxexp, pctx)
+GEN_FUN_CALL(l, args, pctx)
+GEN_FUN_EXP(fname, pars, body, pctx, implicit_return)
+  -- see END_FBODY above for 'implicit_return'
+GEN_CONDITIONAL(test, consequent, alternative, pctx)
+GEN_GROUP(e, pctx)
+GEN_THIS(pctx)
+GEN_TRUE(pctx)
+GEN_FALSE(pctx)
+GEN_NULL(pctx)
+
+Stratified constructs:
+======================
+
+GEN_PREFIX_OP(id, right, pctx) takes another operator: 'spawn'
+
+GEN_WAITFOR_ANDOR(op, blocks, crf, pctx)
+  op: 'and' | 'or'
+  crf: see GEN_TRY
+BEGIN_SUSPEND_BLOCK(pctx)
+END_SUSPEND_BLOCK(pctx)
+GEN_SUSPEND(has_var, decls, block, crf, pctx)
+GEN_COLLAPSE(pctx)
+  crf: see GEN_TRY
+GEN_TRY(block, crf, pctx) 
+    crf is [ [catch_id,catch_block,catchall?]|null, retract_block|null, finally_block|null ]
+    (instead of the non-SJS version above)
+
+- if #define SJS_USING is set:
+
+GEN_USING(isvar, vname, exp, body, pctx)
+
+- if #define SJS___JS is set:
+
+BEGIN___JS_BLOCK(pctx)
+END___JS_BLOCK(pctx)
+GEN___JS(body, pctx)
+
+- if #define SJS_BLOCKLAMBDA is set:
+GEN_BLOCKLAMBDA(pars, body, pctx)
+
+- if #define SJS_ARROWS is set:
+GEN_THIN_ARROW(body_exp, pctx)
+GEN_THIN_ARROW_WITH_PARS(pars_exp, body_exp, pctx)
+GEN_FAT_ARROW(body_exp, pctx)
+GEN_FAT_ARROW_WITH_PARS(pars_exp, body_exp, pctx)
+
+- if #define SJS_DOUBLEDOT is set
+GEN_DOUBLEDOT_CALL(l, r, pctx)
+
+- if #define INTERPOLATING_STRINGS is set:
+GEN_INTERPOLATING_STR(parts, pctx)
+
+- if #define QUASIS is set:
+GEN_QUASI(parts, pctx) with even parts=strings, odd parts=expressions
+
+*/
 
 
-
-
-
-
-
+/*
+ * C1 JS/SJS->minified/stringified compiler kernel  
+ *
+ * Part of Oni Apollo
+ * http://onilabs.com/apollo
+ *
+ * (c) 2011 Oni Labs, http://onilabs.com
+ *
+ * This file is licensed under the terms of the GPL v2, see
+ * http://www.gnu.org/licenses/gpl-2.0.html
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ *
+ */
 
 // #define "STRINGIFY" for stringification
 
@@ -184,6 +480,20 @@ function quasi(parts) {
 
 
 
+/**
+   @module  compile/minify
+   @summary SJS source code minifier
+   @home    sjs:compile/minify
+
+   @function compile
+   @summary  Minify a string of SJS source code
+   @param    {String} [src]
+   @param    {optional Object} [settings]
+   @setting  {Boolean} [keeplines] Maintain line numbers
+   @return   {String} Minified SJS
+*/
+
+
 
 //----------------------------------------------------------------------
 // Helpers
@@ -348,7 +658,78 @@ function S(id, tokenizer) {
   return t;
 }
 
+/*
+BP: Binding Power
+P: Precedence
+A: Associativity (L: left, R: right)
+*: Designates an SJS-specific construct
 
+BP  P  A    Operator      Operand Types                  Operation Performed
+270  1 L     []           MemberExp Expression        
+       L     .            MemberExp Identifier        
+       R     new          MemberExp Arguments        
+260  2 L     ( )          CallExpression Arguments       Function Call
+       L     { }          CallExpression BlockArguments  Block Lambda Call
+  (    L     []           CallExpression Expression        )
+  (    L     .            CallExpression Identifier        )  
+*255   L     ..           ArgExp CallExpression          Double Dot Call
+250  3 n/a   ++           LeftHandSideExp                PostfixIncrement
+       n/a   --           LeftHandSideExp                PostfixDecrement
+240  4 R     delete       UnaryExp                       Call Delete Method
+       R     void         UnaryExp                       Eval and Return undefined
+       R     typeof       UnaryExp                       Return Type of an Object
+  (    R     ++           UnaryExp                       PrefixIncrement )
+  (    R     --           UnaryExp                       PrefixDecrement )
+       R     +            UnaryExp                       UnaryPlus
+       R     -            UnaryExp                       UnaryMinus
+       R     ~            UnaryExp                       BitwiseNot
+       R     !            UnaryExp                       LogicalNot
+230  5 L     *            MultExp UnaryExp               Multiplication
+       L     /            MultExp UnaryExp               Division
+       L     %            MultExp UnaryExp               Remainder
+220  6 L     +            AddExp MultExp                 Addition
+       L     -            AddExp MultExp                 Subtraction
+210  7 L     <<           ShiftExp AddExp                BitwiseLeftShift
+       L     >>           ShiftExp AddExp                SignedRightShift
+       L     >>>          ShiftExp AddExp                UnsignedRightShift
+200  8 L     <            RelExp ShiftExp                LessThanComparison
+       L     >            RelExp ShiftExp                GreaterThanComparison
+       L     <=           RelExp ShiftExp                LessThanOrEqualComparison
+       L     >=           RelExp ShiftExp                GreaterThanOrEqualComparison
+       L     instanceof   RelExp ShiftExp                Call HasInstance Method
+       L     in           RelExp ShiftExp                Call HasProperty Method
+190 9  L     ==           EqualExp RelExp                IsEqual
+       L     !=           EqualExp RelExp                IsNotEqual
+       L     ===          EqualExp RelExp                IsStrictlyEqual
+       L     !==          EqualExp RelExp                IsStrictlyNotEqual
+180 10 L     &            BitwiseAndExp EqualExp         BitwiseAnd
+170 11 L     ^            BitwiseXorExp EqualExp         Bitwise Xor
+160 12 L     |            BitwiseOrExp EqualExp          BitwiseOr
+150 13 L     &&           LogicalAndExp BitwiseOrExp     LogicalAnd
+140 14 L     ||           LogicalOrExp LogicalAndExp     LogicalOr
+130 15 R     ? :          LogicalOrExp AssignExp AssignExp   ConditionalExpression
+120 16 R      =           LeftHandSideExp AssignExp      AssignmentExpression
+       R     *=           LeftHandSideExp AssignExp      AssignmentWithMultiplication
+       R     /=           LeftHandSideExp AssignExp      AssignmentWithDivision
+       R     %=           LeftHandSideExp AssignExp      AssignmentWithRemainder
+       R     +=           LeftHandSideExp AssignExp      AssignmentWithAddition
+       R     -=           LeftHandSideExp AssignExp      AssignmentWithSubtraction
+       R     <<=          LeftHandSideExp AssignExp      AssignmentWithBitwiseLeftShift
+       R     >>=          LeftHandSideExp AssignExp      AssignmentWithSignedRightShift
+       R     >>>=         LeftHandSideExp AssignExp      AssignmentWithUnsignedRightShift
+       R     &=           LeftHandSideExp AssignExp      AssignmentWithBitwiseAnd
+       R     ^=           LeftHandSideExp AssignExp      AssignmentWithBitwiseOr
+       R     |=           LeftHandSideExp AssignExp      AssignmentWithLogicalNot
+*      R     ->           Args AssignExp                 Thin Arrow 
+*      R     ->           AssignExp                      Thin Arrow (prefix form)
+*      R     =>           Args AssignExp                 Fat Arrow
+*      R     =>           AssignExp                      Fat Arrow (prefix form)
+*115         spawn        SpawnExp                       StratifiedJS 'spawn'
+110 17 L     ,            Expression AssignExp           SequentialEvaluation
+
+expressions up to BP 100
+
+*/
 
 
 S("[").

@@ -41,6 +41,57 @@ global.__oni_rt={};(function(exports){var UNDEF;
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 function CFException_toString(){var rv=this.name+": "+this.message;
 
 if(this.__oni_stack){
@@ -315,6 +366,19 @@ return {exec:exec,ndata:arguments,__oni_dis:token_dis};
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
 function Env(aobj,tobj,file,blref,blscope){this.aobj=aobj;
 
 this.tobj=tobj;
@@ -384,6 +448,10 @@ function I_blocklambda(ndata,env){return ndata[0].bind(env);
 
 }
 exports.Bl=makeINCtor(I_blocklambda);
+
+
+
+
 
 
 
@@ -512,6 +580,10 @@ exports.Seq=makeINCtor(I_seq);
 
 
 
+
+
+
+
 function EF_Sc(ndata,env){this.ndata=ndata;
 
 this.env=env;
@@ -581,6 +653,11 @@ function testIsFunction(f){if(typeof f=="function")return true;
 
 return !!/(?:\[[^o])|(?:^\/)/.exec(""+f);
 }
+
+
+
+
+
 
 
 
@@ -781,6 +858,10 @@ exports.Fcall=makeINCtor(I_fcall);
 
 
 
+
+
+
+
 function EF_If(ndata,env){this.ndata=ndata;
 
 this.env=env;
@@ -823,6 +904,22 @@ exports.If=makeINCtor(I_if);
 
 var Default={};
 exports.Default=Default;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -897,6 +994,16 @@ function I_switch(ndata,env){return (new EF_Switch(ndata,env)).cont(0);
 }
 
 exports.Switch=makeINCtor(I_switch);
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1047,6 +1154,11 @@ exports.Try=makeINCtor(I_try);
 
 
 
+
+
+
+
+
 function EF_Loop(ndata,env){this.ndata=ndata;
 
 this.env=env;
@@ -1147,6 +1259,11 @@ exports.Loop=makeINCtor(I_loop);
 
 
 
+
+
+
+
+
 function EF_ForIn(ndata,env){this.ndata=ndata;
 
 this.env=env;
@@ -1237,6 +1354,10 @@ function I_forin(ndata,env){return (new EF_ForIn(ndata,env)).cont(0);
 }
 
 exports.ForIn=makeINCtor(I_forin);
+
+
+
+
 
 
 
@@ -1378,6 +1499,10 @@ function I_par(ndata,env){return (new EF_Par(ndata,env)).cont(-1);
 }
 
 exports.Par=makeINCtor(I_par);
+
+
+
+
 
 
 
@@ -1563,6 +1688,17 @@ function I_alt(ndata,env){return (new EF_Alt(ndata,env)).cont(-1);
 }
 
 exports.Alt=makeINCtor(I_alt);
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -2033,6 +2169,317 @@ exports.modules={};exports.modsrc={};})(__oni_rt);(function(exports){function pu
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 pctx.decl_scopes.push({vars:[],funs:"",fscoped_ctx:0,bl:bl,continue_scope:0,break_scope:0});
 
 
@@ -2353,6 +2800,18 @@ if(typeof this.line==='undefined')this.line=this.stmts[0].line;
 };
 
 
+
+
+
+
+
+
+
+
+
+
+
+
 ph_nblock_seq.prototype.nblock_val=function(){var rv="";
 
 for(var i=0;i<this.stmts.length-1;++i){
@@ -2473,6 +2932,8 @@ if(this.a)rv+=","+this.a.v();
 return rv+")";
 }
 };
+
+
 
 
 
@@ -3537,6 +3998,9 @@ if(lhs)this.assign2=new ph_assign_op(lhs,"=",new ph_identifier("_oniW",pctx),pct
 
 }
 
+
+
+
 ph_using.prototype=new ph();
 ph_using.prototype.val=function(){var rv="__oni_rt.Nb(function(){var _oniW;"+"return __oni_rt.ex(__oni_rt.Seq("+0+","+this.assign1.v()+",";
 
@@ -3743,6 +4207,77 @@ if(tokenizer)t.tokenizer=tokenizer;
 ST.put(id,t);
 return t;
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

@@ -22,7 +22,7 @@ function build_deps() {
   PSEUDO("clean");
   BUILD("clean", ["rm -rf \
     tmp \
-    modules/compile/deps.sjs \
+    modules/compile/deps.js \
     modules/compile/minify.sjs \
     modules/compile/stringify.sjs \
     modules/compile/sjs.sjs \
@@ -38,7 +38,7 @@ function build_deps() {
                                                   "modules/marked.sjs",
                                                   "modules/dashdash.sjs",
                                                   "tmp/version_stamp",
-                                                  "modules/compile/deps.sjs",
+                                                  "modules/compile/deps.js",
                                                   "modules/compile/sjs.sjs",
                                                   "modules/compile/minify.sjs",
                                                   "modules/compile/stringify.sjs",
@@ -64,7 +64,7 @@ function build_deps() {
   CPP("tmp/c1jsstr.js", "-DC1_KERNEL_JSMIN -DSTRINGIFY",
       ["src/c1/c1.js.in", "src/c1/kernel-jsmin.js.in"]);
   // deps analyser:
-  CPP("tmp/c1deps.js", "-DC1_KERNEL_DEPS",
+  CPP("modules/compile/deps.js", "-DC1_KERNEL_DEPS",
       ["src/c1/c1.js.in", "src/c1/kernel-deps.js.in"]);
 
   // SJS compiler:
@@ -76,10 +76,10 @@ function build_deps() {
   // runtime compiler modules
   CONCAT("modules/compile/minify.sjs", compilerSources("tmp/c1jsmin.js"));
   CONCAT("modules/compile/stringify.sjs", compilerSources("tmp/c1jsstr.js"))
-  CONCAT("modules/compile/deps.sjs", compilerSources("tmp/c1deps.js"));
   BUILD("modules/compile/sjs.sjs",
-    "echo 'exports = __oni_rt.c1;' > $TARGET; cat $0 >> $TARGET",
-    [compileFooter]);
+    // the sed command brings in the first comment from kernel-sjs.in (i.e the docs)
+    "sed '/@docsoff/q' $0 > $TARGET; echo 'exports.compile = __oni_rt.c1.compile;' >> $TARGET; cat $1 >> $TARGET",
+    ["src/c1/kernel-sjs.js.in", compileFooter]);
 
 
   //----------------------------------------------------------------------
@@ -381,7 +381,7 @@ function STRINGIFY(target, source, flags) {
 
 // CPP: run C preprocessor
 function CPP(target, defs, deps) {
-  var cmd = "cpp -P -undef -Wundef -std=c99 -traditional-cpp -nostdinc -Wtrigraphs -fdollars-in-identifiers";
+  var cmd = "cpp -C -P -undef -Wundef -std=c99 -traditional-cpp -nostdinc -Wtrigraphs -fdollars-in-identifiers";
   var extraflags = process.env['APOLLO_CFLAGS'] || '';
   BUILD(target, cmd + " " + extraflags + " " + defs + " $0 $TARGET", deps);
 }

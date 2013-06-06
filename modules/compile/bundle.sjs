@@ -87,7 +87,7 @@
     add to the existing set of cached module sources.
 */
 
-var compiler = require('./deps');
+var compiler = require('./deps.js');
 
 var fs = require('sjs:nodejs/fs');
 var url = require('sjs:url');
