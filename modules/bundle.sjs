@@ -1,6 +1,6 @@
 #!/usr/bin/env apollo
 /*
- * Oni Apollo 'compile/bundle' module
+ * Oni Apollo 'bundle' module
  *
  * Part of the Oni Apollo Standard Module Library
  * Version: 'unstable'
@@ -31,9 +31,9 @@
  */
 
 /**
-  @module  compile/bundle
+  @module  bundle
   @summary Create SJS code bundles
-  @home    sjs:compile/bundle
+  @home    sjs:bundle
   @hostenv nodejs
   @desc
     StratifiedJS' module system encourages you to break your code into
@@ -58,7 +58,7 @@
     This module can be imported from SJS code, but it can also be directly
     invoked from the command line by running e.g:
 
-        apollo sjs:compile/bundle --help
+        apollo sjs:bundle --help
 
     Although multiple functions are exported from this module, most users
     will only need to use [::create].
@@ -87,7 +87,7 @@
     add to the existing set of cached module sources.
 */
 
-var compiler = require('./deps.js');
+var compiler = require('./compile/deps.js');
 
 var fs = require('sjs:nodejs/fs');
 var url = require('sjs:url');
@@ -255,7 +255,7 @@ var relax = function(fn) {
     Most code should not need to use this function directly - see [::create].
 */
 function writeBundle(deps, path, settings) {
-  var stringifier = require('./stringify');
+  var stringifier = require('./compile/stringify');
 
   var strict = settings.strict !== false; // true by default
   var excludes = (settings.exclude || []);
@@ -320,7 +320,7 @@ exports.writeBundle = writeBundle;
     The settings provided to this function match the options given
     to this module when run from the command line.
 
-    Run `apollo sjs:compile/bundle --help` to see a full
+    Run `apollo sjs:bundle --help` to see a full
     description of what these options do.
 
     ### Example:

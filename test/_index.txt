@@ -2,7 +2,7 @@
 ### regenerate it by running src/build/make-apollo
 unit/array-tests.sjs
 unit/assert-tests.sjs
-unit/compile/bundle-tests.sjs
+unit/bundle-tests.sjs
 unit/compile/minify-tests.sjs
 unit/compile/stringify-tests.sjs
 unit/cutil-tests.sjs
