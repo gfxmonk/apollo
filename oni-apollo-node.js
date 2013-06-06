@@ -5,7 +5,7 @@
  * Version: 'unstable'
  * http://onilabs.com/apollo
  *
- * (c) 2011 Oni Labs, http://onilabs.com
+ * (c) 2011-2013 Oni Labs, http://onilabs.com
  *
  * This file is licensed under the terms of the GPL v2, see
  * http://www.gnu.org/licenses/gpl-2.0.html
@@ -4380,7 +4380,7 @@ return gen_for(start_exp,decls,test_exp,inc_exp,body,pctx);
 
 scan(pctx);
 
-if(decls&&decls.length>1)throw new Error("More that one variable declaration in for-in loop");
+if(decls&&decls.length>1)throw new Error("More than one variable declaration in for-in loop");
 
 var obj_exp=parseExp(pctx);
 scan(pctx,")");

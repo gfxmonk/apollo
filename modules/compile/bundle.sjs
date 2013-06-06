@@ -87,7 +87,7 @@
     add to the existing set of cached module sources.
 */
 
-var compiler = require('./deps.js');
+var compiler = require('./deps');
 
 var fs = require('sjs:nodejs/fs');
 var url = require('sjs:url');
@@ -255,7 +255,7 @@ var relax = function(fn) {
     Most code should not need to use this function directly - see [::create].
 */
 function writeBundle(deps, path, settings) {
-  var stringifier = require('./stringify.js');
+  var stringifier = require('./stringify');
 
   var strict = settings.strict !== false; // true by default
   var excludes = (settings.exclude || []);

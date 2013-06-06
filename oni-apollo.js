@@ -1,11 +1,11 @@
 /*
  * Oni Apollo StratifiedJS Runtime
  * Client-side Cross-Browser implementation
- * 
+ *
  * Version: 'unstable'
  * http://onilabs.com/apollo
  *
- * (c) 2010-2011 Oni Labs, http://onilabs.com
+ * (c) 2010-2013 Oni Labs, http://onilabs.com
  *
  * This file is licensed under the terms of the MIT License:
  *
@@ -4409,7 +4409,7 @@ return gen_for(start_exp,decls,test_exp,inc_exp,body,pctx);
 
 scan(pctx);
 
-if(decls&&decls.length>1)throw new Error("More that one variable declaration in for-in loop");
+if(decls&&decls.length>1)throw new Error("More than one variable declaration in for-in loop");
 
 var obj_exp=parseExp(pctx);
 scan(pctx,")");

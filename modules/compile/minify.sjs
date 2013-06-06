@@ -1,3 +1,4 @@
+__js {
 
 
 
@@ -984,7 +985,7 @@ S("for").stmt(function(pctx) {
     scan(pctx);
     //XXX check that start_exp is a valid LHS
     if (decls && decls.length > 1)
-      throw new Error("More that one variable declaration in for-in loop");
+      throw new Error("More than one variable declaration in for-in loop");
     var obj_exp = parseExp(pctx);
     scan(pctx, ")");
     
@@ -1498,3 +1499,10 @@ function scan(pctx, id, tokenizer) {
   return pctx.token;
 }
 
+}
+if (require.main === module) {
+	var seq = require('sjs:sequence'), fs = require('sjs:nodejs/fs');
+	process.argv.slice(1) .. seq.each {|f|
+		fs.readFile(f) .. exports.compile .. console.log
+	}
+}

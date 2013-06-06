@@ -37,7 +37,7 @@ function top_scope(pctx) {
 
 var process_script = function(stmts) {
   stmts = seq(stmts);
-  return stmts.collapse();
+  return stmts.flatten();
 }
 
 var seq = function(exprs) {
@@ -124,7 +124,7 @@ var Dynamic = {
   // values
   staticVal: Nothing,                   // statically-determined value (an eval()-able string)
   text: Nothing,                        // source code representation
-  collapse: function() { return []; },  // Return all non-dynamic children
+  flatten: function() { return []; },  // Return all non-dynamic children
   toString: function() { return "Dynamic()"; },
 };
 
@@ -171,7 +171,7 @@ var Seq = function(a,b) {
 };
 Seq.prototype = Object.create(Dynamic);
 Seq.prototype.seq = function(other) { return new Seq(this, other); };
-Seq.prototype.collapse = function() { return this.a.collapse().concat(this.b.collapse()); };
+Seq.prototype.flatten = function() { return this.a.flatten().concat(this.b.flatten()); };
 Seq.prototype.toString = function() { return "Seq(" + this.a + "," + this.b + ")"; };
 
 // A function call
@@ -182,7 +182,7 @@ var Call = function(prop, args) {
 };
 Call.prototype = Object.create(Dynamic);
 Call.prototype.seq = function(other) { return new Seq(this, other); };
-Call.prototype.collapse = function() {
+Call.prototype.flatten = function() {
   var call_args = [];
   var args = this.args;
   var prop = this.prop;

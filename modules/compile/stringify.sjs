@@ -1,3 +1,4 @@
+__js {
 
 
 
@@ -7,15 +8,15 @@
 
 
 
+
+// #define "STRINGIFY" for stringification
 
 //----------------------------------------------------------------------
 // helpers:
 
 function push_scope(pctx) {
-  pctx.scopes.push({
-    stmts:[],
-    assignments: [],
-  });
+  pctx.scopes.push({stmts:[]});
+  top_scope(pctx).stmts.push(flush_newlines(pctx));
 }
 function pop_scope(pctx) {
   return pctx.scopes.pop();
@@ -24,233 +25,24 @@ function top_scope(pctx) {
   return pctx.scopes[pctx.scopes.length-1];
 }
 
-var process_script = function(stmts) {
-  stmts = seq(stmts);
-  return stmts.collapse();
-}
-
-var seq = function(exprs) {
-  var r = Dynamic;
-  for (var i=0; i<exprs.length; i++) {
-    // console.log("sequencing " + r + " with " + exprs[i]);
-    if (exprs[i]) r = r.seq(exprs[i]);
-    // console.log(" -> " + r);
-  }
-  return r;
-}
-
-var toDynamic = function() { return Dynamic; };
-
-// Generic Data types:
-
-var Maybe = function(x) { return x === undefiend ? Nothing() : Just(x); };
-
-var Just = function(x) {
-  return {
-    defined: function() { return true; },
-    map: function(f) { return Just(f(x)); },
-    get: function() { return x; },
-    toString: function () { return "Just(" + x + ")"; },
-  };
-};
-
-var Nothing = function() {
-  return {
-    defined: function() { return false; },
-    map: function() { return this; },
-    get: function(d) { return d; },
-    toString: function() { return "Nothing()"; },
-  };
-};
-
-var map = function(arr, fn) {
-  // [a] -> (a -> b) -> [b]
-  var res = [];
-  for (var i=0; i<arr.length; i++) {
-    res[i] = fn(arr[i]);
-  }
-  return res;
-}
-var mapM = function(arr, fn) {
-  // [Maybe a] -> (a -> b) -> [Maybe b]
-  var res = [];
-  for (var i=0; i<arr.length; i++) {
-    res[i] = arr[i].map(fn);
-  }
-  return res;
-}
-
-var flattenM = function(arr) {
-  // [Maybe a] -> Maybe [a]
-  var ret = [];
-  for (var i=0; i<arr.length; i++) {
-    if (!(arr[i].defined())) { return Nothing(); }
-    ret[i] = arr[i].get();
-  }
-  return Just(ret);
-}
-
-var filterM = function(arr) {
-  // [Maybe a] -> [a]
-  var ret = [];
-  for (var i=0; i<arr.length; i++) {
-    if (arr[i] instanceof Nothing) continue;
-    ret[i] = arr[i].get();
-  }
-  return ret;
-}
-
-
-// Minimal AST
-
-// Dynamic also serves as the base for other syntax types:
-var Dynamic = {
-  // combinators
-  seq: function(other) { return other; },
-  dot: function(prop) { return Dynamic; },
-  call: function(args) { return Dynamic; },
-
-  // values
-  staticVal: Nothing,                   // statically-determined value (an eval()-able string)
-  text: Nothing,                        // source code representation
-  collapse: function() { return []; },  // Return all non-dynamic children
-  toString: function() { return "Dynamic()"; },
-};
-
-// Identifier
-var Id = function(text, scope) {
-  this._text = text;
-  this.scope = (scope || []).slice();
-};
-Id.prototype = Object.create(Dynamic);
-Id.prototype.dot = function(prop) {
-  return new Id(this.text().get() + "." + prop, this.scope);
-};
-Id.prototype.call = function(args) {
-  return new Call(this, args);
-};
-Id.prototype.text = function() {
-  if (!this._resolved) {
-    this._resolved = (function() {
-      var result = Just(this._text);
-      if (this._text.indexOf(".") != -1) {
-        return result;
-      }
-
-      var text = this._text;
-      for (var i=this.scope.length - 1; i>=0; i--) {
-        var name = this.scope[i][0];
-        var val = this.scope[i][1];
-        if(val && name.text().get(null) === text) {
-          return val.text();
-        }
-      }
-      return result;
-    }).call(this);
-  }
-  return this._resolved;
-};
-Id.prototype.toString = function() { return "Id(" + this.text() + ")"; };
-
-// A sequence of AST nodes (well, just two - successive sequences form a stick)
-var Seq = function(a,b) {
-  this.a = a;
-  this.b = b;
-  // console.log(" # " + this);
-};
-Seq.prototype = Object.create(Dynamic);
-Seq.prototype.seq = function(other) { return new Seq(this, other); };
-Seq.prototype.collapse = function() { return this.a.collapse().concat(this.b.collapse()); };
-Seq.prototype.toString = function() { return "Seq(" + this.a + "," + this.b + ")"; };
-
-// A function call
-var Call = function(prop, args) {
-  this.prop = prop;
-  this.args = args;
-  // console.log(" # " + this);
-};
-Call.prototype = Object.create(Dynamic);
-Call.prototype.seq = function(other) { return new Seq(this, other); };
-Call.prototype.collapse = function() {
-  var call_args = [];
-  var args = this.args;
-  var prop = this.prop;
-  for (var i=0; i<args.length; i++) {
-    var val = args[i].staticVal().get(null);
-    if (val == null) {
-      return [];
-    }
-    call_args[i] = val;
-  }
-  // console.log("call prop: " + prop.text());
-  return prop.text().map(function(ident) {
-    switch(ident) {
-      case "require":
-        return [["require", call_args]];
-        break;
-      case "require.hubs.unshift":
-        return [["hub_insert", call_args]];
-        break;
-      case "require.hubs.push":
-        return [["hub_append", call_args]];
-        break;
-      default: return [];
-    }
-  }).get([]);
-};
-Call.prototype.toString = function() { return "Call(" + this.prop + "," + this.args + ")"; };
-
-// A primitive literal
-var Lit = function(val) {
-  this.val = val;
-  // console.log(" # " + this);
-};
-Lit.prototype = Object.create(Dynamic);
-Lit.prototype.staticVal = function() { return Just(eval(this.val)); };
-Lit.prototype.toString = function() { return "Literal(" + this.staticVal() + ")"; };
-
-
-// an Array literal
-var ArrayLit = function(arr) {
-  this.arr = arr;
-  // console.log(" # " + this);
-};
-ArrayLit.prototype = Object.create(Dynamic);
-ArrayLit.prototype.staticVal = function() {
-  var arr = this.arr;
-  var maybeVals = [];
-  for (var i=0; i<arr.length; i++) {
-    maybeVals[i] = arr[i].staticVal();
-  }
-  return flattenM(maybeVals);
-};
-ArrayLit.prototype.toString = function() {
-  var join = function(vals) { return vals.join(","); };
-  return "[" + this.staticVal().map(join) + "]";
-};
-
-// an Object literal
-var ObjectLit = function(pars) {
-  this.pars = pars;
-  // console.log(" # " + this);
-}
-ObjectLit.prototype = Object.create(Dynamic);
-ObjectLit.prototype.staticVal = function() {
-  var pars = this.pars;
-  var obj = {};
-  for (var i=0; i<pars.length; i++) {
-    var elem = pars[i];
-    elem[1].staticVal().map(function(v) {
-      obj[elem[0]] = v;
-    });
-  }
-  return Just(obj);
-};
-ObjectLit.prototype.toString = function() { return "JSON(" + this.staticVal().map(JSON.stringify) + ")"; };
-
 //----------------------------------------------------------------------
 // misc:
 
+// XXX our newline handling is really quite hackish :-(
+// XXX and it's completely broken by multiline strings atm :-(
+
+function add_newlines(n,pctx) {
+  if (!pctx.keeplines) return;
+  if (typeof pctx.nls == 'undefined') pctx.nls = "";
+  while (n--) pctx.nls += "\\n";
+}
+
+function flush_newlines(pctx) {
+  if (!pctx.nls) return "";
+  var rv = pctx.nls;
+  pctx.nls = "";
+  return rv;
+}
   
 //----------------------------------------------------------------------
 // contexts:
@@ -258,6 +50,13 @@ ObjectLit.prototype.toString = function() { return "JSON(" + this.staticVal().ma
 
 
 
+
+
+function gen_block(code) {
+  if (code.length && code[code.length-1]==";")
+    code = code.substr(0,code.length-1);
+  return "{"+code+"}";
+}
 
 
 
@@ -278,6 +77,10 @@ ObjectLit.prototype.toString = function() { return "JSON(" + this.staticVal().ma
 
 
 
+function gen_fun_pars(pars) {
+  return pars.join(",");
+}
+
 
 
 
@@ -292,9 +95,13 @@ ObjectLit.prototype.toString = function() { return "JSON(" + this.staticVal().ma
 
 
 function gen_crf(crf) {
-  var rv = Dynamic;
+  var rv = "";
+  if (crf[0])
+    rv += (crf[0][2] ? "catchall(" : "catch(")+crf[0][0]+")"+crf[0][1];
+  if (crf[1])
+    rv += "retract"+crf[1];
   if (crf[2])
-    rv = rv.seq(crf[2]);
+    rv += "finally"+crf[2];
   return rv;
 }
 
@@ -303,10 +110,56 @@ function gen_crf(crf) {
 // expressions:
 
 
+function gen_infix_op(left, id, right, pctx) {
+  if (id == "instanceof" || id == "in" ||
+      (id[0] == left[left.length-1]) || // e.g. left= "a--", id="-"
+      (id[id.length-1] == right[0])) // e.g. id="+", right="++a"
+    return left+" "+id+" "+right;
+  else
+    return left+id+right;
+}
+
+
+
+function gen_prefix_op(id, right, pctx) {
+  if (id.length > 2 || // one of [delete,void,typeof,spawn]
+      id[0]==right[0] && (id[0] == "+" || id[0] == "-")) // cases like "- --i"
+    return id + " " + right;
+  else
+    return id+right;
+}
+
+
 // note the intentional space in ' =>' below; it is to fix cases like '= => ...'
 
 
 
+function interpolating_string(parts) {
+  var rv = '\\"';
+  for (var i=0,l=parts.length;i<l;++i) {
+    var p = parts[i];
+    if (Array.isArray(p)) {
+      p = "#{"+p[0]+"}";
+    }
+    else {
+      p = p.replace(/\\/g,"\\\\").replace(/'/g,"\\'").replace(/"/g,'\\"');
+    }
+    rv += p;
+  }
+  return rv+'\\"';
+}
+
+function quasi(parts) {
+  var rv = '`';
+  for (var i=0,l=parts.length;i<l;++i) {
+    if (i % 2)
+      rv += '${'+parts[i]+'}';
+    else {
+      rv += parts[i].replace(/\\/g,"\\\\").replace(/'/g,"\\'").replace(/"/g,'\\"');
+    }
+  }
+  return rv + '`';
+}
 
 
 
@@ -321,6 +174,11 @@ function gen_crf(crf) {
 
 
 
+
+
+
+
+// Stratified constructs:
 
 
 
@@ -425,7 +283,7 @@ SemanticToken.prototype = {
     this.excf = function(left, pctx) {
       var right = parseExp(pctx, bp);
       
-      return  right;
+      return gen_infix_op(left,  this.id,  right,  pctx);
     };
     return this;
   },
@@ -436,7 +294,7 @@ SemanticToken.prototype = {
     this.excf = function(left, pctx) {
       var right = parseExp(pctx, bp);
       
-      if ( this.id == '=') top_scope( pctx).assignments.push([left,  right]);
+      return left+ this.id+ right;
     };
     return this;
   },
@@ -445,14 +303,14 @@ SemanticToken.prototype = {
     return this.exs(function(pctx) {
       var right = parseExp(pctx, bp);
       
-      return  right;
+      return gen_prefix_op(this.id,  right,  pctx);
     });
   },
   // encode postfix operation
   pst: function(bp) {
     return this.exc(bp, function(left, pctx) {
       
-      return left;
+      return left +  this.id + " ";
     });
   }  
 };
@@ -467,7 +325,7 @@ Literal.prototype.tokenizer = TOKENIZER_OP;
 Literal.prototype.toString = function() { return "literal '"+this.value+"'"; };
 Literal.prototype.exsf = function(pctx) {
   
-  return new Lit( this.value);
+  if (this.id == "<string>")                                                    this.value =  this.value.replace(/\\/g,"\\\\").replace(/'/g,"\\'").replace(/"/g,'\\"');   else if (this.id == "<regex>")                                                this.value =  this.value.replace(/\\/g,"\\\\").replace(/'/g,"\\'").replace(/"/g,'\\"');   return  this.value;
 };
 
 //-----
@@ -477,7 +335,7 @@ function Identifier(value) {
 Identifier.prototype = new Literal("<id>");
 Identifier.prototype.exsf = function(pctx) {
   
-  return new Id(this.value, top_scope( pctx).assignments);
+  return this.value;
 };
 Identifier.prototype.toString = function() { return "identifier '"+this.value+"'";};
 
@@ -503,7 +361,7 @@ S("[").
     while (pctx.token.id != "]") {
       if (elements.length) scan(pctx, ",");
       if (pctx.token.id == ",") {
-        elements.push((function(pctx) {  return Dynamic; })(pctx));
+        elements.push((function(pctx) {  return " "; })(pctx));
       }
       else if (pctx.token.id == "]")
         break; // allows trailing ','
@@ -512,14 +370,14 @@ S("[").
     }
     scan(pctx, "]");
     
-    return new ArrayLit(elements);
+    return "["+elements.join(",")+"]";
   }).
   // indexed property access
   exc(270, function(l, pctx) {
     var idxexp = parseExp(pctx);
     scan(pctx, "]");
     
-    return l.dot( idxexp);
+    return l+"["+ idxexp+"]";
   });
 
 S(".").exc(270, function(l, pctx) {
@@ -528,7 +386,7 @@ S(".").exc(270, function(l, pctx) {
   var name = pctx.token.value;
   scan(pctx);
   
-  return l.dot( name);
+  return l+"."+ name;
 });
 
 S("new").exs(function(pctx) {
@@ -543,7 +401,7 @@ S("new").exs(function(pctx) {
     scan(pctx, ")");
   }
   
-  return Dynamic;
+  return "new "+exp+"("+ args.join(",")+")";
 });
 
 S("(").
@@ -561,7 +419,7 @@ S("(").
     var e = parseExp(pctx);
     scan(pctx, ")");
     
-    return e;
+    return "("+e+")";
   }).
   // function call
   exc(260, function(l, pctx) {
@@ -592,13 +450,13 @@ S("(").
     }
 
     
-    return l.call( args);
+    return l+"("+ args.join(",")+")";
   });
 
 S("..").exc(255, function(l, pctx) {
   var r = parseExp(pctx, 255);
   
-  return l.seq(r);
+  return l+".."+r;
 });
 
 S("++").pre(240).pst(250).asi_restricted = true;
@@ -646,7 +504,7 @@ S("?").exc(130, function(test, pctx) {
   scan(pctx, ":");
   var alternative = parseExp(pctx, 110);
   
-  return Dynamic;
+  return test+"?"+ consequent+":"+ alternative;
 });
 
 S("=").asg(120, true);
@@ -667,26 +525,26 @@ S("->")
   .exs(function(pctx) {
     var body = parseExp(pctx, 119.5); // 119.5 because of right-associativity
     
-    return Dynamic;
+    return gen_prefix_op('->',  body,  pctx);
   })
   // infix form with parameters expression
   .exc(120, function(left, pctx) {
     var body = parseExp(pctx, 119.5);
     
-    return Dynamic;
+    return gen_infix_op(left,  '->',   body,   pctx);
   });
 S("=>")
   // prefix form without parameters expression
   .exs(function(pctx) {
     var body = parseExp(pctx, 119.5); // 119.5 because of right-associativity
     
-    return Dynamic;
+    return gen_prefix_op(' =>',  body,  pctx);
   })
   // infix form with parameters expression
   .exc(120, function(left, pctx) {
     var body = parseExp(pctx, 119.5);
     
-    return Dynamic;
+    return gen_infix_op(left,  '=>',   body,   pctx);
   });
 
 S("spawn").pre(115);
@@ -713,24 +571,24 @@ function parseBlock(pctx) {
   while (pctx.token.id != "}") {
     var stmt = parseStmt(pctx);
     
-    top_scope( pctx).stmts.push(stmt);
+    top_scope( pctx).stmts.push(stmt+flush_newlines( pctx));
   }
   scan(pctx, "}");
   
-  return seq(pop_scope(pctx).stmts);
+  return gen_block(pop_scope(pctx).stmts.join(""));
 }
 
 function parseBlockLambdaBody(pctx) {
   
-  
+  push_scope(pctx);
   while (pctx.token.id != "}") {
     var stmt = parseStmt(pctx);
     
-    ;
+    top_scope( pctx).stmts.push(stmt+flush_newlines( pctx));;
   }
   scan(pctx, "}");
   
-  return Dynamic;
+  return pop_scope(pctx).stmts.join("");
 }
 function parseBlockLambda(start, pctx) {
   // collect parameters
@@ -744,7 +602,7 @@ function parseBlockLambda(start, pctx) {
 
   var body = parseBlockLambdaBody(pctx);
   
-  return Dynamic;
+  return "{|"+gen_fun_pars(pars)+"| "+ body+"}";
 }
 
 S("{").
@@ -780,7 +638,7 @@ S("{").
       }
       scan(pctx, "}", TOKENIZER_OP); // note the special tokenizer case here
       
-      var rv = [];                                 for (var i=0; i<props.length; ++i) {           if (props[i][0] == "prop") {                   rv.push([props[i][1], props[i][2]]);       }                                          }                                            return new ObjectLit(rv);
+      var rv = "{";                                                       for (var i=0; i<props.length; ++i) {                                  if (i!=0) rv += ",";                                                if (props[i][0] == "prop") {                                          var v = props[i][1].replace(/\\/g,"\\\\").replace(/'/g,"\\'").replace(/"/g,'\\"');       rv += v +":"+props[i][2];                               }                                                                   else if (props[i][0] == "method") {                                          var v = props[i][1].replace(/\\/g,"\\\\").replace(/'/g,"\\'").replace(/"/g,'\\"');       rv += v+(props[i][2].replace(/^[^(]+/,''));                       }                                                                   else if (props[i][0] == "pat")                                        rv += props[i][1];                                                else if (props[i][0] == "get")                                        rv += "get " + props[i][1]+"()"+props[i][2];                      else if (props[i][0] == "set")                                        rv += "set " + props[i][1]+"("+props[i][2]+")"+props[i][3];     }                                                                   rv += "}";                                                          return rv;
     }
   }).
   // block lambda call:
@@ -790,13 +648,13 @@ S("{").
       throw new Error("Unexpected token '"+pctx.token+"' - was expecting '|' or '||'");
     var args = [parseBlockLambda(start, pctx)];
     
-    return l.call( args);;
+    return l+"("+ args.join(",")+")";;
   }).
   // block:
   stmt(parseBlock);
 
 // deliminators
-S(";").stmt(function(pctx) {  return Dynamic; });
+S(";").stmt(function(pctx) {  return ";"; });
 S(")", TOKENIZER_OP);
 S("]", TOKENIZER_OP);
 S("}"); // note the special tokenizer case for object literals, above
@@ -811,16 +669,16 @@ S("<eof>").
 // helper to parse a function body:
 function parseFunctionBody(pctx, implicit_return) {
   
-  
+  push_scope(pctx);
   scan(pctx, "{");
   while (pctx.token.id != "}") {
     var stmt = parseStmt(pctx);
     
-    
+    top_scope( pctx).stmts.push(stmt+flush_newlines( pctx));
   }
   scan(pctx, "}");
   
-  return Dynamic;
+  return gen_block(pop_scope(pctx).stmts.join(""));
 }
 
 function parseFunctionParam(pctx) {
@@ -872,7 +730,7 @@ S("function").
     var pars = parseFunctionParams(pctx);
     var body = parseFunctionBody(pctx);
     
-    return Dynamic;
+    if (fname.length)                                           return "function "+fname+"("+gen_fun_pars( pars)+")"+ body;   else                                                        return "function("+gen_fun_pars( pars)+")"+ body;
   }).
   // statement function form ('function declaration')
   stmt(function(pctx) {
@@ -882,15 +740,15 @@ S("function").
     var pars = parseFunctionParams(pctx);
     var body = parseFunctionBody(pctx);
     
-    return Dynamic;
+    return "function "+fname+"("+gen_fun_pars( pars)+")"+ body;
   });
 
-S("this", TOKENIZER_OP).exs(function(pctx) {  return new Id("this"); });
-S("true", TOKENIZER_OP).exs(function(pctx) {  return new Lit("true"); });
-S("false", TOKENIZER_OP).exs(function(pctx) {  return new Lit("false"); });
-S("null", TOKENIZER_OP).exs(function(pctx) {  return new Lit("null"); });
+S("this", TOKENIZER_OP).exs(function(pctx) {  return "this"; });
+S("true", TOKENIZER_OP).exs(function(pctx) {  return "true"; });
+S("false", TOKENIZER_OP).exs(function(pctx) {  return "false"; });
+S("null", TOKENIZER_OP).exs(function(pctx) {  return "null"; });
 
-S("collapse", TOKENIZER_OP).exs(function(pctx) {   });
+S("collapse", TOKENIZER_OP).exs(function(pctx) {  return "collapse"; });
 
 S('"', TOKENIZER_IS).exs(function(pctx) {
   var parts = [], last=-1;
@@ -935,9 +793,9 @@ S('"', TOKENIZER_IS).exs(function(pctx) {
 
   if (last == 0 && typeof parts[0] == 'string') {
     var val = '"'+parts[0]+'"';
-    return new Lit(val);
+    if ('<string>' == "<string>")                                                   val = val.replace(/\\/g,"\\\\").replace(/'/g,"\\'").replace(/"/g,'\\"');   else if ('<string>' == "<regex>")                                               val = val.replace(/\\/g,"\\\\").replace(/'/g,"\\'").replace(/"/g,'\\"');   return val;
   }
-  return Dynamic;
+  return interpolating_string(parts);
 });
 
 S('istr-#{', TOKENIZER_SA);
@@ -996,7 +854,7 @@ S('`', TOKENIZER_QUASI).exs(function(pctx) {
     parts.push('');
   }
 
-  return Dynamic;;
+  return quasi(parts);;
 });
 
 function parseQuasiInlineEscape(pctx) {
@@ -1016,7 +874,7 @@ function parseQuasiInlineEscape(pctx) {
       if (args.length) scan(pctx, ',');
       args.push(parseExp(pctx, 110)); // only parse up to comma
     }
-    return identifier.exsf(pctx).call( args);
+    return identifier.exsf(pctx)+"("+ args.join(",")+")";
   }
 }
 
@@ -1054,7 +912,7 @@ S("var").stmt(function(pctx) {
   var decls = parseVarDecls(pctx);
   parseStmtTermination(pctx);
   
-  for (var i=0; i<decls.length; ++i) {                if (decls[i].length == 2) {                         top_scope( pctx).assignments.push(decls[i]);       return decls[i][1];;                }                                               };
+  var rv = "var ";                                 for (var i=0; i<decls.length; ++i) {               if (i) rv += ",";                                rv += decls[i][0];                               if (decls[i].length == 2)                          rv += "="+decls[i][1];                       }                                                return rv+";";
 });
 
 S("else");
@@ -1070,7 +928,7 @@ S("if").stmt(function(pctx) {
     alternative = parseStmt(pctx);
   }
   
-  return Dynamic;
+  var rv = "if("+test+")"+ consequent;                   if ( alternative !== null){                              if(  alternative[0] != "{")                              rv += "else "+ alternative;                          else                                                    rv += "else"+ alternative;                         }                                                     return rv;
 });
 
 S("while").stmt(function(pctx) {
@@ -1081,7 +939,7 @@ S("while").stmt(function(pctx) {
   var body = parseStmt(pctx);
   
   
-  return Dynamic;
+  return "while("+test+")"+ body;
 });
 
 S("do").stmt(function(pctx) {
@@ -1094,7 +952,7 @@ S("do").stmt(function(pctx) {
   scan(pctx, ")");
   parseStmtTermination(pctx);
   
-  return Dynamic;
+  return "do "+body+"while("+ test+");";
 });
 
 S("for").stmt(function(pctx) {
@@ -1124,13 +982,13 @@ S("for").stmt(function(pctx) {
     var body = parseStmt(pctx);
     
     
-    return Dynamic;
+    var rv = "for(";                                                        if (start_exp) {                                                           rv += start_exp + ";";                                                 }                                                                       else if ( decls) {                                                       var d = (function( decls,  pctx) {                                            var rv = "var ";                                 for (var i=0; i< decls.length; ++i) {               if (i) rv += ",";                                rv +=  decls[i][0];                               if ( decls[i].length == 2)                          rv += "="+ decls[i][1];                       }                                                return rv+";"; })( decls,  pctx);                          rv += d;                                                                }                                                                       else                                                                      rv += ";";                                                            if ( test_exp) rv +=  test_exp;                                           rv += ";";                                                              if ( inc_exp) rv +=  inc_exp;                                             rv += ")";                                                              rv +=  body;                                                             return rv;
   }
   else if (pctx.token.id == "in") {
     scan(pctx);
     //XXX check that start_exp is a valid LHS
     if (decls && decls.length > 1)
-      throw new Error("More that one variable declaration in for-in loop");
+      throw new Error("More than one variable declaration in for-in loop");
     var obj_exp = parseExp(pctx);
     scan(pctx, ")");
     
@@ -1138,7 +996,7 @@ S("for").stmt(function(pctx) {
     
     var decl = decls ? decls[0] : null;
     
-    return Dynamic;
+    var rv = "for(";                                        if (start_exp) {                                            rv += start_exp;                                        }                                                       else {                                                  rv += "var "+ decl[0];                                   if ( decl.length > 1)                                      rv += "=" + decl[1];                                   }                                                       rv += " in " +  obj_exp + ")";                           rv +=  body;                                             return rv;
   }
   else
     throw new Error("Unexpected token '"+pctx.token+"' in for-statement");
@@ -1152,7 +1010,7 @@ S("continue").stmt(function(pctx) {
   }
   parseStmtTermination(pctx);
   
-  return Dynamic;
+  var rv = "continue";                            if (label !== null)                                 rv += " "+label;                                return rv+";"
 });
 
 S("break").stmt(function(pctx) {
@@ -1163,7 +1021,7 @@ S("break").stmt(function(pctx) {
   }
   parseStmtTermination(pctx);
   
-  return Dynamic;
+  var rv = "break";                               if (label !== null)                                 rv += " "+label;                                return rv+";"
 });
 
 S("return").stmt(function(pctx) {
@@ -1172,7 +1030,7 @@ S("return").stmt(function(pctx) {
     exp = parseExp(pctx);
   parseStmtTermination(pctx);
   
-  return exp;
+  var rv = "return";                              if (exp != null)                                  rv += " "+exp;                                return rv+";";
 });
 
 S("with").stmt(function(pctx) {
@@ -1181,7 +1039,7 @@ S("with").stmt(function(pctx) {
   scan(pctx, ")");
   var body = parseStmt(pctx);
   
-  return  body;
+  return "with("+exp+")"+ body;
 });
 
 S("case");
@@ -1207,18 +1065,18 @@ S("switch").stmt(function(pctx) {
       throw new Error("Invalid token '"+pctx.token+"' in switch statement");
     scan(pctx, ":");
     
-    
+    push_scope( pctx);                              top_scope( pctx).exp = clause_exp;
     while (pctx.token.id != "case" && pctx.token.id != "default" && pctx.token.id != "}") {
       var stmt = parseStmt(pctx);
       
-      
+      top_scope( pctx).stmts.push(stmt+flush_newlines( pctx));
     }
-    clauses.push((function(pctx) {   })(pctx));
+    clauses.push((function(pctx) {  var scope = pop_scope(pctx);                      var rv;                                           if (scope.exp)                                      rv = "case "+scope.exp+":";                     else                                                rv = "default:";                                return rv + scope.stmts.join(""); })(pctx));
   }
   
   scan(pctx, "}");
   
-  return Dynamic;
+  return "switch("+exp+")"+gen_block( clauses.join(""));
 });
 
 S("throw").stmt(function(pctx) {
@@ -1226,7 +1084,7 @@ S("throw").stmt(function(pctx) {
   var exp = parseExp(pctx);
   parseStmtTermination(pctx);
   
-  return Dynamic;;
+  return "throw "+exp+";";;
 });
 
 S("catch");
@@ -1281,7 +1139,7 @@ S("try").stmt(function(pctx) {
     if (!crf[0] && !crf[1] && !crf[2])
       throw new Error("Missing 'catch', 'finally' or 'retract' after 'try'");
     
-    return block.seq(gen_crf( pctx));
+    return "try"+block+gen_crf( crf);
   }
   else {
     var blocks = [block];
@@ -1292,7 +1150,7 @@ S("try").stmt(function(pctx) {
     } while (pctx.token.value == op);
     var crf = parseCRF(pctx);
     
-    var rv = Dynamic;                                 for (var i=0; i< blocks.length; ++i){                rv = rv.seq( blocks[i]);                         }                                                 return rv;
+    var rv = "waitfor";                               for (var i=0; i< blocks.length; ++i){                if (i) rv += op;                                  rv +=  blocks[i];                                }                                                 rv += gen_crf( crf);                               return rv;
   }
 });
 
@@ -1310,7 +1168,7 @@ S("waitfor").stmt(function(pctx) {
     } while (pctx.token.value == op);
     var crf = parseCRF(pctx);
     
-    var rv = Dynamic;                                 for (var i=0; i< blocks.length; ++i){                rv = rv.seq( blocks[i]);                         }                                                 return rv;
+    var rv = "waitfor";                               for (var i=0; i< blocks.length; ++i){                if (i) rv += op;                                  rv +=  blocks[i];                                }                                                 rv += gen_crf( crf);                               return rv;
   }
   else {
     // suspend form
@@ -1332,7 +1190,7 @@ S("waitfor").stmt(function(pctx) {
     
     
     
-    return  block;
+    var rv = "waitfor(";                                   if (has_var) rv += "var ";                             for (var i=0; i< decls.length; ++i) {                     if (i) rv += ",";                                      rv +=  decls[i][0];                                     if ( decls[i].length == 2)                                rv += "="+ decls[i][1];                             }                                                      rv += ")" +  block;                                     rv += gen_crf( crf);                                    return rv;
   }    
 });
 
@@ -1357,7 +1215,7 @@ S("using").stmt(function(pctx) {
   scan(pctx, ")");
   var body = parseStmt(pctx);
   
-  return  body;
+  var rv = "using(";                                if (has_var) rv += "var ";                        if ( lhs) rv +=  lhs + "=";                         rv +=  exp + ")";                                  return rv +  body;
 });
 
 S("__js").stmt(function(pctx) {
@@ -1367,7 +1225,7 @@ S("__js").stmt(function(pctx) {
   
   
   
-  return Dynamic;
+  return "__js "+body;
 });
 
 
@@ -1452,9 +1310,9 @@ function parseScript(pctx) {
   while (pctx.token.id != "<eof>") {
     var stmt = parseStmt(pctx);
     
-    if(stmt) top_scope( pctx).stmts.push(stmt);;
+    top_scope( pctx).stmts.push(stmt+flush_newlines( pctx));;
   }
-  return process_script(pop_scope(pctx).stmts);
+  return '"'+pop_scope(pctx).stmts.join("")+'"';
 }
 
 function parseStmt(pctx) {
@@ -1470,14 +1328,14 @@ function parseStmt(pctx) {
     // XXX should maybe code this in non-recursive style:
     var stmt = parseStmt(pctx);
     
-    return  stmt;
+    return t.value+": "+ stmt;
   }
   else {
     // an expression statement
     var exp = parseExp(pctx, 0, t);
     parseStmtTermination(pctx);
     
-    return exp;
+    return exp +";";
   }
 }
 
@@ -1553,7 +1411,7 @@ function scan(pctx, id, tokenizer) {
         if (m) {
           pctx.line += m.length;
           pctx.newline += m.length;
-          
+          add_newlines(m.length, pctx);
         }
         // go round loop again
       }
@@ -1589,7 +1447,7 @@ function scan(pctx, id, tokenizer) {
         if (m) {
           pctx.line += m.length;
           pctx.newline += m.length;
-          
+          add_newlines(m.length, pctx);
         }
         // go round loop again
       }
@@ -1644,3 +1502,10 @@ function scan(pctx, id, tokenizer) {
   return pctx.token;
 }
 
+}
+if (require.main === module) {
+	var seq = require('sjs:sequence'), fs = require('sjs:nodejs/fs');
+	process.argv.slice(1) .. seq.each {|f|
+		fs.readFile(f) .. exports.compile .. console.log
+	}
+}
