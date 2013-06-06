@@ -309,6 +309,7 @@ exports.writeBundle = writeBundle;
   @function create
   @summary Generate a module bundle from the given sources (including dependencies)
   @param {Settings} [settings]
+  @setting {Array} [sources] Array of source module names to scan
   @setting {Array} [alias] Array of alias strings
   @setting {Array} [hub] Array of hub strings
   @setting {String} [bundle] File path of bundle file to write
