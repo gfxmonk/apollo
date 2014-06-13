@@ -313,23 +313,124 @@ GEN_QUASI(parts, pctx) with even parts=strings, odd parts=expressions
 //----------------------------------------------------------------------
 // helpers:
 
-function push_scope(pctx) {
-  pctx.scopes.push({
-    stmts:[],
-    assignments: [],
-  });
+var Object_prototype = Object.getPrototypeOf({}); // not the same as Object.prototype in nodejs sandbox
+var has = function(o,k) { return Object.prototype.hasOwnProperty.call(o,k); };
+var str = function(obj) {
+  if (Array.isArray(obj)) {
+    return "[" + obj.join(", ") + "]";
+  }
+  if (obj && (obj.toString === Object_prototype.toString)) {
+    var pairs = [];
+    for (var k in obj) {
+      if (!has(obj,k)) continue;
+      pairs.push(k + ": " + str(obj[k]));
+    }
+    return "{" + pairs.join(", ") + "}";
+  }
+  return String(obj);
+};
+var assert = function(cond, desc) { if (!cond) throw new Error(desc || "Assertion failed"); return cond };
+
+function ModuleImports(args) {
+  this.args = args;
+};
+ModuleImports.prototype.toString = function() {
+  return "ModuleImports(" + str(this.args) + ")";
+};
+
+function Scope(parent, pctx) {
+  this._parent = parent;
+  this.variables = {};
+  this.stmts = [];
+  this.children = [];
+  this.pctx = pctx;
+  if (parent) parent.children.push(this);
+};
+Scope.prototype.toString = function() {
+  return "Scope(" + str(this.variables) + ")";
 }
-function pop_scope(pctx) {
-  return pctx.scopes.pop();
-}
-function top_scope(pctx) {
-  return pctx.scopes[pctx.scopes.length-1];
+Scope.prototype.add_var = function(name) {
+  if (name instanceof Id) {
+    name = name.name;
+  }
+  if (typeof(name) !== 'string') {
+    throw new Error("weird name: " + str(name) + " // " + typeof(name));
+  }
+  assert(!Object.prototype.hasOwnProperty.call(this.variables, name), "variable defined twice: " + name);
+  var ident = new Variable(name, this)
+  this.variables[name] = ident;
+  console.log("VARIABLE: " + name + " // " + this);
+  return ident;
+};
+Scope.prototype.get_var = function(v) {
+  assert(typeof(v) === 'string', "non-string variable: " + v);
+  if (v === 'this') {
+    // there's a `this` in every scope, but it does nothing
+    return new Id('this', this);
+  }
+  if (Object.prototype.hasOwnProperty.call(this.variables, v)) {
+    return new Ref(this.variables[v], this.pctx);
+  }
+  if (this._parent) {
+    return this._parent.get_var(v);
+  }
+  console.warn("global variable reference: " + v);
+  return new Ref(this.add_var(v), this.pctx);
+};
+
+// represents a tree-shake unit - anything behind an ExportScope
+// can be removed from the module output if not referenced by any used scope
+function ExportScope(name) {
+  this.name = name;
+  this.references = []; // a list of `Variable` objects
+};
+ExportScope.prototype.clone = function() {
+  return new ExportScope(this.name);
+};
+ExportScope.prototype.toString = function() {
+  return "ExportScope(" + this.name + ", " + str(this.dependencies) + ")";
 }
 
-var process_script = function(stmts) {
-  stmts = seq(stmts);
-  // console.log("stmts:", String(stmts));
-  return stmts.flatten();
+// var ExportScope = function(parent, symbol) {
+//   this._parent = parent;
+//   this._symbol = symbol;
+//   this.requirements = [];
+//   this.dependency_filters = [];
+//   this.clone = function() {
+//     return new ExportScope(this);
+//   }
+// }
+// ExportScope.prototype.set = function(sym) {
+//   this._symbol = sym;
+// };
+// 
+// ExportScope.prototype.symbol = function() {
+//   if (this._symbol) return this._symbol;
+//   return this._parent ? this._parent.symbol() : null;
+// };
+//
+function ModuleReference(module, property) {
+  this.module = module;
+  this.property = property;
+};
+ModuleReference.prototype.toString = function() {
+  return "ModuleReference(" + str(this.module) + ", " + this.property + ")";
+};
+
+function tapLog(desc, val) {
+  console.log(desc, val);
+  return val;
+}
+
+var process_script = function(pctx) {
+  var scope = current_scope(pctx);
+  var stmts = seq(scope.stmts);
+  console.log(stmts.flatten());
+  console.log(str(scope));
+  return {
+    requires: stmts.flatten(),
+    toplevel: scope,
+  };
 }
 
 var seq = function(exprs) {
@@ -351,6 +452,7 @@ var Just = function(x) {
     bind: function(f) { return f(x); },
     get: function() { return x; },
     getLazy: function(_) { return x; },
+    orElse: function(_) { return this; },
     toString: function () { return "Just(" + x + ")"; },
   };
 };
@@ -362,6 +464,7 @@ var Nothing = function() {
     get: function(d) { return d; },
     getLazy: function(fn) { return fn(); },
     bind: function(d) { return this; },
+    orElse: function(d) { return d; },
     toString: function() { return "Nothing()"; },
   };
 };
@@ -418,6 +521,26 @@ var flattenAnyM = function(arr) {
 
 
 // Minimal AST
+//
+// Static(x) represents a dependency that will definitely occur in the given scope
+// (e.g "this module WILL require ./mod2").
+//
+// Dynamic(x) represents an upper bound of the dependency-relevant information
+// in a given scope (e.g the symbol "foo" may be used, and it may come from
+// either "./mod1" or "./mod2").
+
+var applyScope = (function() {
+  var inner = function(obj, scope) {
+    assert(obj.exportScope === undefined, "can't scope " + obj + " to " + scope + " - already scoped to " + obj.exportScope);
+    console.log("SCOPE[" + scope + "]: " + str(obj));
+    obj.exportScope = scope;
+    obj.traverse(function(child) { inner(child, scope); });
+  };
+  return function(obj, scope) {
+    assert(typeof(scope) === 'string' || scope === null, "not a string: " + scope);
+    inner.apply(null, arguments);
+  };
+})();
 
 // Dynamic also serves as the base for other syntax types:
 var Dynamic = {
@@ -426,47 +549,228 @@ var Dynamic = {
   dot: function(prop) { return Dynamic; },
   call: function(args) { return Dynamic; },
 
+  // scope:
+  exportScope: undefined,
+  traverse: function(f) { },
+
   // values
-  staticVal: Nothing,                   // statically-determined value (an eval()-able string)
-  text: Nothing,                        // source code representation
-  flatten: function() { return []; },  // Return all non-dynamic children
+  staticValue: Nothing,                 // statically-determined value (an eval()-able string)
+  // text: Nothing,                        // source code representation
+  flatten: function() { return []; },   // Return all non-dynamic children
   toString: function() { return "Dynamic()"; },
 };
 
+var Property = function(parent, text, pctx) {
+  this.parent = parent;
+  this.name = text;
+  this.children = {};
+  this.values = [];
+}
+Property.prototype = Object.create(Dynamic);
+Property.prototype.staticValue = function() {
+  var self = this;
+  return this.parent.staticValue.map (function(val) {
+    return val + "." + self.name;
+  });
+};
+Property.prototype.toString = function() {
+  return str(this.parent) + "." + this.name;
+}
+
 // Identifier
 var Id = function(text, scope) {
-  this._text = text;
-  this.scope = (scope || []).slice();
+  this.name = text;
+  this.scope = scope;
 };
 Id.prototype = Object.create(Dynamic);
-Id.prototype.dot = function(prop) {
-  return new Id(this.text().get() + "." + prop, this.scope);
-};
-Id.prototype.call = function(args) {
-  return new Call(this, args);
-};
-Id.prototype.text = function() {
-  if (!this._resolved) {
-    this._resolved = (function() {
-      var result = Just(this._text);
-      if (this._text.indexOf(".") != -1) {
-        return result;
-      }
+Id.prototype.toString = function() { return "Id(" + this.name + ")"; };
 
-      var text = this._text;
-      for (var i=this.scope.length - 1; i>=0; i--) {
-        var name = this.scope[i][0];
-        var val = this.scope[i][1];
-        if(val && name.text().get(null) === text) {
-          return val.text();
+// delegate `dot`, `assign`, etc to underlying variable
+;['dot','assign', 'call'].forEach(function(method) {
+  Id.prototype[method] = function() {
+    var variable = this.scope.get_var(this.name);
+    return variable[method].apply(variable, arguments);
+  };
+});
+
+var Variable = function(text, scope) {
+  this.name = text;
+  this.scope = scope;
+  this.export_scope = null;
+  this.values = [];
+  this.children = {};
+  this.provides = [this];
+  // console.log("ID: " + this, this.scopes);
+};
+Variable.prototype = Object.create(Dynamic);
+Variable.prototype.call = function(args) {
+  var call = new Call(this, args);
+  console.log("CALL: " + call);
+  return call;
+};
+Variable.prototype.staticValue = function() {
+  console.log("TODO: Variable.staticValue", this, this.values);
+  return Nothing();
+};
+
+Variable.prototype.dot = Property.prototype.dot = function(name) {
+  if (!has(this.children, name)) {
+    this.children[name] = new Property(this, name);
+  }
+  return assert(this.children[name]);
+};
+
+Variable.prototype.assign = Property.prototype.assign = function(value) {
+  console.log(str(this) + " assuming value: " + str(value));
+  this.values.push(value);
+};
+
+Variable.prototype.toString = function() { return "Variable(" + this.name + ")"; };
+
+var Ref = function(dest, pctx) {
+  assert(dest, "Ref created with empty destination!");
+  this.dest = dest;
+  this.pctx = pctx;
+  pctx.current_stmt.add_reference(this);
+};
+Ref.prototype = Object.create(Dynamic);
+
+Ref.prototype.call = function(args) {
+  console.log("REF CALL");
+  var call = this.dest.call(args, this.pctx);
+  return new Ref(call, this.pctx);
+};
+
+Ref.prototype.staticValue = function() {
+  return this.dest.staticValue();
+};
+
+Ref.prototype.dot = function(name) {
+  var underlying = this.dest.dot(name);
+  return new Ref(underlying, this.pctx);
+};
+
+Ref.prototype.assign = function(value) {
+  console.log("ASSIGNING TO " + this);
+  return this.dest.assign(value);
+};
+Ref.prototype.toString = function() { return "Ref(" + this.dest + ")"; };
+
+
+var Statement = function() {
+  this.references = [];
+  this.dependencies = [];
+  this.stmt = null;
+}
+Statement.prototype = Object.create(Dynamic);
+// // Statement passes all methods onto the underlying stmt
+// Object.keys(Statement.prototype).forEach(function(k) {
+//   Statement.prototype[k] = function() {
+//     return this.stmt[k].apply(this.stmt, arguments);
+//   }
+// });
+Statement.prototype.toString = function() {
+  return 'Stmt{'+this.stmt.toString() +'}';
+};
+Statement.prototype.add_reference = function(ref) {
+  this.references.push(ref);
+};
+Statement.prototype.set = function(stmt) {
+  if (this.stmt) throw new Error("Can't re-assign " + this.stmt + " to " + stmt);
+  this.stmt = stmt;
+};
+Statement.prototype.traverse = function(f) {
+  this.stmt.traverse(f);
+};
+
+Statement.prototype.calculateDependencies = function(stmts) {
+  this.calculateDirectDependencies(stmts);
+  this.expandDependencies();
+};
+
+Statement.prototype.calculateDirectDependencies = function(stmts) {
+  var changed = false;
+  // console.log("--- EXPAND: " + this);
+  for (var i = 0; i < stmts.length; i++) {
+    var stmt = stmts[i];
+    if(stmt === this) continue;
+    var provides = stmt.stmt.provides;
+    if (!provides) continue;
+    for (var r = 0; r<this.references.length; r++) {
+      var ref = this.references[r];
+      if (provides.indexOf(ref.dest) !== -1) {
+        // console.log("stmt " + this + " depends on " + stmt);
+        // reference to a toplevel variable
+        if (this.dependencies.indexOf(stmt) == -1) {
+          this.dependencies.push(stmt);
+          changed = true;
         }
       }
-      return result;
-    }).call(this);
+    }
   }
-  return this._resolved;
+  return changed;
 };
-Id.prototype.toString = function() { return "Id(" + this.text() + ")"; };
+
+Statement.prototype.expandDependencies = function() {
+  var self = this;
+  var seen = [];
+  var traverse = function(stmt) {
+    for (var i=0; i<stmt.dependencies.length; i++) {
+      var dep = stmt.dependencies[i];
+      if (dep === self) return;
+      if (seen.indexOf(dep) !== -1) return;
+      seen.push(dep);
+      if (self.dependencies.indexOf(dep) === -1) {
+        // console.log("TRANSITIVE: " + self + " depends on " + dep);
+        self.dependencies.push(dep);
+      }
+      traverse(dep);
+    }
+  }
+  traverse(self);
+};
+
+var Assignment = function(l, op, r, pctx) {
+  if(l instanceof Ref) {
+    l = l.dest;
+  }
+  this.left = l;
+  this.op = op;
+  this.right = r;
+  var scope = current_scope(pctx);
+  if (l instanceof Variable || l instanceof Property) {
+    this.provides = [l];
+    if (this.op === '=') this.left.assign(this.right);
+  }
+}
+Assignment.prototype = Object.create(Dynamic);
+Assignment.prototype.toString = function() {
+  return "Assignment(" + str(this.left) + " " + this.op + " " + str(this.right) + ")";
+}
+Assignment.prototype.staticValue = function() { return this.right; };
+Assignment.prototype.scopeTo = function(name) {
+  assert(!this.exportScope, "already scoped: " + str(this));
+  assert(typeof(name) === 'string', "not a string: " + name);
+  this.exportScope = Some(name);
+  this.right.scopeTo(name);
+};
+
+// A reference to an exported symbol
+var ModuleReference = function(module, symbol) {
+  this.module = module; // either `null` for the current mod, or an array of module names
+  this.symbol = symbol;
+};
+
+var FunctionDef = function(scope) {
+  this.scope = scope;
+};
+FunctionDef.prototype = Object.create(Dynamic);
+FunctionDef.prototype.toString = function() {
+  return "Function(" + str(this.scope) + ")";
+};
+FunctionDef.traverse = function(f) {
+  f(this.scope);
+};
 
 // A sequence of AST nodes (well, just two - successive sequences form a stick)
 var Seq = function(a,b) {
@@ -483,52 +787,51 @@ Seq.prototype.flatten = function() { return this.a.flatten().concat(this.b.flatt
 Seq.prototype.toString = function() { return "Seq(" + this.a + "," + this.b + ")"; };
 
 // A function call
-var Call = function(prop, args) {
-  this.prop = prop;
+var Call = function(expr, args) {
+  this.expr = expr;
   this.args = args;
-  // console.log(" # " + this);
 };
 Call.prototype = Object.create(Dynamic);
 Call.prototype.seq = function(other) { return new Seq(this, other); };
 Call.prototype.dot = function(property) {
-  /* the result of call().prop can't be static,
-   * but that doesn't mean call() isn't - just
-   * treat it as a single call followed by a dynamic statement.
-   */
-  return this.seq(Dynamic);
+  return new Property(this, property);
+};
+
+Call.prototype.staticArgs = function() {
+  // returns Maybe [staticValue]
+  var args = this.args;
+  var static_args = [];
+  for (var i=0; i<args.length; i++) {
+    static_args[i] = args[i].staticValue();
+  }
+  return flattenAnyM(static_args);
 };
 
 Call.prototype.flatten = function() {
   var prop = this.prop;
-  var args = this.args;
-
-  var static_args = [];
-  for (var i=0; i<args.length; i++) {
-    static_args[i] = args[i].staticVal();
-  }
-  return flattenAnyM(static_args).bind(function(static_args) {
-    return prop.text().bind(function(ident) {
-      switch(ident) {
-        case "require":
-          return Just([["require", static_args]]);
-          break;
-        case "require.hubs.unshift":
-          return Just([["hub_insert", static_args]]);
-          break;
-        case "require.hubs.push":
-          return Just([["hub_append", static_args]]);
-          break;
-        default: return Nothing();
-      }
-    })
+  var static_args = this.staticArgs();
+  return tapLog('ARG_FLAT:', prop.staticValue().bind(function(ident) {
+    console.log("IDENT " + ident);
+    switch(ident) {
+      case "require":
+        return Just({call: "require", args: static_args});
+        break;
+      case "require.hubs.unshift":
+        return Just({call:"hub_insert", args: static_args});
+        break;
+      case "require.hubs.push":
+        return Just({call:"hub_append", args: static_args});
+        break;
+      default: return Nothing();
+    }
   }).getLazy(function() {
     // this isn't a require call, but our args will
     // always be evaluated, and they might contain
     // require()s
-    return seq(args).flatten();
-  });
+    return seq(static_args).flatten();
+  }));
 };
-Call.prototype.toString = function() { return "Call(" + this.prop + "," + this.args + ")"; };
+Call.prototype.toString = function() { return "Call(" + this.expr + "," + this.args + ")"; };
 
 // A primitive literal
 var Lit = function(val) {
@@ -536,8 +839,8 @@ var Lit = function(val) {
   // console.log(" # " + this);
 };
 Lit.prototype = Object.create(Dynamic);
-Lit.prototype.staticVal = function() { return Just(eval(this.val)); };
-Lit.prototype.toString = function() { return "Literal(" + this.staticVal() + ")"; };
+Lit.prototype.staticValue = function() { return Just(eval(this.val)); };
+Lit.prototype.toString = function() { return "Literal(" + this.staticValue() + ")"; };
 
 
 // an Array literal
@@ -546,17 +849,17 @@ var ArrayLit = function(arr) {
   // console.log(" # " + this);
 };
 ArrayLit.prototype = Object.create(Dynamic);
-ArrayLit.prototype.staticVal = function() {
+ArrayLit.prototype.staticValue = function() {
   var arr = this.arr;
   var maybeVals = [];
   for (var i=0; i<arr.length; i++) {
-    maybeVals[i] = arr[i].staticVal();
+    maybeVals[i] = arr[i].staticValue();
   }
   return flattenAnyM(maybeVals);
 };
 ArrayLit.prototype.toString = function() {
   var join = function(vals) { return vals.join(","); };
-  return "[" + this.staticVal().map(join) + "]";
+  return "[" + this.staticValue().map(join) + "]";
 };
 
 // an Object literal
@@ -565,18 +868,111 @@ var ObjectLit = function(pars) {
   // console.log(" # " + this);
 }
 ObjectLit.prototype = Object.create(Dynamic);
-ObjectLit.prototype.staticVal = function() {
+ObjectLit.prototype.staticValue = function() {
   var pars = this.pars;
   var obj = {};
   for (var i=0; i<pars.length; i++) {
     var elem = pars[i];
-    elem[1].staticVal().map(function(v) {
+    elem[1].staticValue().map(function(v) {
       obj[elem[0]] = v;
     });
   }
   return Just(obj);
 };
-ObjectLit.prototype.toString = function() { return "JSON(" + this.staticVal().map(JSON.stringify) + ")"; };
+ObjectLit.prototype.toString = function() { return "JSON(" + this.staticValue().map(JSON.stringify) + ")"; };
+
+
+function init_toplevel(pctx) {
+  var GlobalScope = new Scope(null, pctx);
+  var Toplevel = new Scope(GlobalScope, pctx);
+
+  function constant(name) {
+    var v = Toplevel.add_var(name);
+    return v;
+  };
+  Toplevel.top = Toplevel;
+  Toplevel.require = constant('require');
+  Toplevel.exports = constant('exports');
+  Toplevel.module = constant('module');
+  pctx.scopes = [Toplevel];
+  pctx.current_stmt = new Statement();
+};
+
+function push_scope(pctx) {
+  console.log("++ SCOPE");
+  var parent = current_scope(pctx);
+  var scope = new Scope(parent, pctx);
+  scope.top = pctx.scopes[0];
+  pctx.scopes.push(scope);
+  return scope;
+}
+
+function pop_scope(pctx) {
+  var scope = pctx.scopes.pop();
+  console.log("-- SCOPE");
+  return scope;
+}
+
+function add_stmt(stmt, pctx, top) {
+  if (!stmt) {
+    console.warn("NUll stmt: " + stmt);
+    return;
+  }
+  if(Array.isArray(stmt)) {
+    console.log("Adding " + stmt.length + " statements");
+    for (var i=0;i<stmt.length;i++) {
+      add_stmt(stmt[i], pctx, top);
+    }
+    return;
+  }
+  var scope = current_scope(pctx);
+  if (top) {
+    var container = pctx.current_stmt;
+    container.set(stmt);
+    pctx.current_stmt = new Statement();
+
+    if (stmt instanceof Assignment) {
+      console.log("Assignment to: " + stmt.left);
+      var root = stmt.left.dest;
+      console.log("root : " + root);
+      if (root instanceof Property) {
+        var prop = null;
+        while(root instanceof Property) {
+          prop = root.name;
+          root = root.parent;
+        }
+        if (root instanceof Variable) {
+          console.log("SCOPE: " + prop);
+          applyScope(container, 'exports.' + (prop || null));
+        } else {
+          applyScope(container, null);
+        }
+      }
+    } else if (stmt instanceof Variable) {
+      // toplevel var
+      applyScope(container, stmt.name);
+    } else {
+      // non-assignments get toplevel scope
+      console.log("Non-assignment: " + stmt);
+      applyScope(container, null);
+    }
+
+    stmt = container;
+    console.log("TOPLEVEL STMT: " + stmt);
+
+    if (stmt.exportScope === undefined) {
+      // all toplevel statements have a global exportScope by default
+      applyScope(stmt, null);
+    }
+  }
+  scope.stmts.push(stmt);
+};
+
+function current_scope(pctx) {
+  return pctx.scopes[pctx.scopes.length-1];
+}
+
+
 
 //----------------------------------------------------------------------
 // misc:
@@ -768,7 +1164,7 @@ SemanticToken.prototype = {
     this.excf = function(left, pctx) {
       var right = parseExp(pctx, bp);
       
-      if (this.id == '=') top_scope(pctx).assignments.push([left, right]);   return right;
+      console.log("ASSIGN_OP", str(left), this.id, str(right));   return new Assignment(left, this.id, right, pctx);
     };
     return this;
   },
@@ -817,16 +1213,16 @@ Identifier.prototype.exsf = function(pctx) {
   if (this.alternate === true) {
     if (this.value.length) {
       
-      return (new Id("__oni_altns")).dot(this.value);
+      return current_scope(pctx).get_var("__oni_altns").dot(this.value);
     }
     else {
       
-      return new Id("__oni_altns");
+      return current_scope(pctx).get_var("__oni_altns");
     }
   }
   else {
     
-    return new Id(this.value, top_scope(pctx).assignments);
+    return new Id(this.value, current_scope(pctx));
   }
 };
 
@@ -948,7 +1344,7 @@ S(".").exc(270, function(l, pctx) {
   var name = pctx.token.value;
   scan(pctx);
   
-  return l.dot(name);
+  console.log("DOTTING:"+l + "." + name + " -> " + l.dot(name));return l.dot(name);
 });
 
 S("new").exs(function(pctx) {
@@ -1138,11 +1534,11 @@ function parseBlock(pctx) {
   while (pctx.token.id != "}") {
     var stmt = parseStmt(pctx);
     
-    top_scope(pctx).stmts.push(stmt);
+    add_stmt(stmt, pctx);
   }
   scan(pctx, "}");
   
-  return seq(pop_scope(pctx).stmts);
+  console.log("END_BLOCK: " + str(current_scope(pctx))); return pop_scope(pctx);
 }
 
 function parseBlockLambdaBody(pctx) {
@@ -1236,16 +1632,16 @@ S("<eof>").
 // helper to parse a function body:
 function parseFunctionBody(pctx, implicit_return) {
   
-  /* */
+  push_scope(pctx);
   scan(pctx, "{");
   while (pctx.token.id != "}") {
     var stmt = parseStmt(pctx);
     
-    /* */
+    add_stmt(stmt, pctx);
   }
   scan(pctx, "}");
   
-  return Dynamic;
+  console.log("END_FBODY: " + str(current_scope(pctx))); return new FunctionDef(pop_scope(pctx));
 }
 
 function parseFunctionParam(pctx) {
@@ -1297,7 +1693,7 @@ S("function").
     var pars = parseFunctionParams(pctx);
     var body = parseFunctionBody(pctx);
     
-    return Dynamic;
+    console.log("FUNBOD: " + str(body)); return body;
   }).
   // statement function form ('function declaration')
   stmt(function(pctx) {
@@ -1310,7 +1706,7 @@ S("function").
     return Dynamic;
   });
 
-S("this", TOKENIZER_OP).exs(function(pctx) {  return new Id("this"); });
+S("this", TOKENIZER_OP).exs(function(pctx) {  return current_scope(pctx).get_var("this"); });
 S("true", TOKENIZER_OP).exs(function(pctx) {  return new Lit("true"); });
 S("false", TOKENIZER_OP).exs(function(pctx) {  return new Lit("false"); });
 S("null", TOKENIZER_OP).exs(function(pctx) {  return new Lit("null"); });
@@ -1479,7 +1875,7 @@ S("var").stmt(function(pctx) {
   var decls = parseVarDecls(pctx);
   parseStmtTermination(pctx);
   
-  for (var i=0; i<decls.length; ++i) {                if (decls[i].length == 2) {                         top_scope(pctx).assignments.push(decls[i]);       return decls[i][1];;                }                                               };
+  var rv=[];                                                 for (var i=0; i<decls.length; ++i) {                         console.log("GEN_VAR " + str(decls[i]));                   var v = current_scope(pctx).add_var(decls[i][0].name);     if (decls[i].length == 2) {                                  rv.push(new Assignment(v, '=', decls[i][1], pctx));      } else {                                                     rv.push(v);                                              }                                                        };                                                         return rv;
 });
 
 S("else");
@@ -1858,28 +2254,28 @@ function compile(src, settings) {
   // wins performance-wise:
 
   var pctx = makeParserContext(src+"\n", settings);
-  try {
+  // try {
     return parseScript(pctx);
-  }
-  catch (e) {
-    var mes = e.mes || e;
-    var line = e.line || pctx.line;
-    var exception = new Error("SJS syntax error "+(pctx.filename?"in "+pctx.filename+",": "at") +" line " + line + ": " + mes);
-    exception.compileError = {message: mes, line: line};
-    throw exception;
-  }
+  // }
+  // catch (e) {
+  //   var mes = e.mes || e;
+  //   var line = e.line || pctx.line;
+  //   var exception = new Error("SJS syntax error "+(pctx.filename?"in "+pctx.filename+",": "at") +" line " + line + ": " + mes);
+  //   exception.compileError = {message: mes, line: line};
+  //   throw exception;
+  // }
 }
 exports.compile = compile;
 
 function parseScript(pctx) {
-  if (typeof pctx.scopes !== 'undefined')                        throw new Error("Internal parser error: Nested script");   pctx.scopes = [];                                            push_scope(pctx);
+  if (typeof pctx.scopes !== 'undefined')                        throw new Error("Internal parser error: Nested script");   pctx.export_scopes = {};                                     init_toplevel(pctx);
   scan(pctx);
   while (pctx.token.id != "<eof>") {
     var stmt = parseStmt(pctx);
     
-    if(stmt) top_scope(pctx).stmts.push(stmt);;
+    add_stmt(stmt, pctx, true);;
   }
-  return process_script(pop_scope(pctx).stmts);
+  return process_script(pctx);
 }
 
 function parseStmt(pctx) {
@@ -2068,4 +2464,3 @@ function scan(pctx, id, tokenizer) {
   }
   return pctx.token;
 }
-

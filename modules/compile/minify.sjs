@@ -1,4 +1,5 @@
 __js {
+console.log('EQ', {}.toString === Object.prototype.toString);
 /*
  * C1 Stratified JavaScript parser 
  *
@@ -1700,16 +1701,16 @@ function compile(src, settings) {
   // wins performance-wise:
 
   var pctx = makeParserContext(src+"\n", settings);
-  try {
+  // try {
     return parseScript(pctx);
-  }
-  catch (e) {
-    var mes = e.mes || e;
-    var line = e.line || pctx.line;
-    var exception = new Error("SJS syntax error "+(pctx.filename?"in "+pctx.filename+",": "at") +" line " + line + ": " + mes);
-    exception.compileError = {message: mes, line: line};
-    throw exception;
-  }
+  // }
+  // catch (e) {
+  //   var mes = e.mes || e;
+  //   var line = e.line || pctx.line;
+  //   var exception = new Error("SJS syntax error "+(pctx.filename?"in "+pctx.filename+",": "at") +" line " + line + ": " + mes);
+  //   exception.compileError = {message: mes, line: line};
+  //   throw exception;
+  // }
 }
 exports.compile = compile;
 
@@ -1911,6 +1912,7 @@ function scan(pctx, id, tokenizer) {
   return pctx.token;
 }
 
+console.log('EQ_c1_end', {}.toString === global.Object.prototype.toString);
 }
 if (require.main === module) {
 	var seq = require('sjs:sequence'), fs = require('sjs:nodejs/fs');

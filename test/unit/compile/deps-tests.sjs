@@ -23,9 +23,18 @@ var { @compile } = require('sjs:compile/deps.js');
     deps("require('logging').log(123);") .. @assert.eq(['logging']);
   }
 
+  @test("immediately-executed functions") {||
+    deps("(function() { require('logging'); })()") .. @assert.eq(['logging']);
+  }
+
   @test("function argument require expressions") {||
     deps("log(require('mod'));") .. @assert.eq(['mod']);
     deps("console.log(require('mod'));") .. @assert.eq(['mod']);
+  }
+
+  @test("ignores calls to a shadowed `require` variable") {||
+    deps("var require = null;require(\"foo\")") .. @assert.eq([]);
+    deps("(function(require) {require(\"foo\");}()") .. @assert.eq([]);
   }
 }.serverOnly();
 

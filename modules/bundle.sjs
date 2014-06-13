@@ -205,15 +205,39 @@ function findDependencies(sources, settings) {
       throw new Error("Error loading " + resolved.path + ":\n" + e);
     }
 
-    var calls;
+    var metadata;
     try {
-      calls = compiler.compile(src);
+      var metadata = compiler.compile(src);
     } catch (e) {
       throw new Error("Error compiling " + resolved.path + ":\n" + e);
     }
     module.loaded = true;
 
-    calls .. seq.each {|[name, args]|
+    metadata.toplevel.stmts .. seq.each {|stmt|
+      stmt.calculateDependencies(metadata.toplevel.stmts);
+      console.log("Stmt: " + stmt);
+      console.log(" --- scope: " + stmt.exportScope);
+      ;(stmt.stmt.provides || []) .. seq.each {|ref|
+        console.log(" - provides:" + ref);
+        ;(ref.values || []) .. seq.each {|ref|
+          console.log("   - assumes value:" + ref);
+        }
+      }
+      stmt.dependencies .. seq.each {|ref|
+        console.log(" - needs:" + ref);
+      }
+      stmt.references .. seq.each {|ref|
+        console.log(" - references:" + ref);
+      }
+    }
+
+
+    metadata.toplevel.variables .. object.ownPropertyPairs .. seq.each {|[k, v]|
+      console.log("var: " + k + " = " + v);
+    }
+    process.exit(1);
+
+    metadata.statements .. seq.each {|[name, args]|
       if (name === 'require') {
         if (!isArrayLike(args[0])) {
           addRequire(args[0], module);
