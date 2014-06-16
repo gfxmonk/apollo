@@ -238,7 +238,6 @@ var applyScope = (function() {
     // assert(obj.exportScope === undefined, "can't scope " + obj + " to " + scope + " - already scoped to " + obj.exportScope);
     console.log("SCOPE(" + str(scope) + "): " + str(obj));
     obj.exportScope.push(scope);
-    obj.traverse(function(child) { inner(child, scope); });
   };
   return function(obj, scope) {
     assert(typeof(scope) === 'string' || scope === null, "not a string: " + scope);
@@ -255,7 +254,6 @@ var Dynamic = {
 
   // scope:
   exportScope: undefined,
-  traverse: function(f) { },
 
   // values
   staticValue: Nothing,                 // statically-determined value (an eval()-able string)
@@ -263,6 +261,16 @@ var Dynamic = {
   flatten: function() { return []; },   // Return all non-dynamic children
   toString: function() { return "Dynamic()"; },
 };
+
+function Block(scope) {
+  this.scope = scope;
+};
+Block.prototype = Object.create(Dynamic);
+Block.prototype.merge = false; // merge with parent block upon completion
+Block.prototype.toString = function() {
+  return "Block{"+str(this.scope.stmts)+"}";
+};
+
 
 var Property = function(parent, text, pctx) {
   this.parent = parent;
@@ -386,9 +394,6 @@ Statement.prototype.remove_reference = function(ref) {
 Statement.prototype.set = function(stmt) {
   if (this.stmt) throw new Error("Can't re-assign " + this.stmt + " to " + stmt);
   this.stmt = stmt;
-};
-Statement.prototype.traverse = function(f) {
-  this.stmt.traverse(f);
 };
 
 Statement.prototype.calculateDependencies = function(toplevel) {
@@ -549,17 +554,6 @@ Assignment.prototype.scopeTo = function(name) {
   this.right.scopeTo(name);
 };
 
-var FunctionDef = function(scope) {
-  this.scope = scope;
-};
-FunctionDef.prototype = Object.create(Dynamic);
-FunctionDef.prototype.toString = function() {
-  return "Function(" + str(this.scope) + ")";
-};
-FunctionDef.traverse = function(f) {
-  f(this.scope);
-};
-
 // A sequence of AST nodes (well, just two - successive sequences form a stick)
 var Seq = function(a,b) {
   this.a = a;
@@ -709,8 +703,17 @@ function init_toplevel(pctx) {
 function push_scope(pctx) {
   console.log("++ SCOPE");
   var parent = current_scope(pctx);
-  var scope = new Scope(parent, pctx);
-  scope.top = pctx.scopes[0];
+  var scope;
+  if (pctx.suppress_next_block) {
+    // hack: duplicate current scope so that
+    // it's effectively merged, and
+    // pop_scope doesn't freak out
+    delete pctx.suppress_next_block;
+    scope = parent;
+  } else {
+    scope = new Scope(parent, pctx);
+    scope.top = pctx.scopes[0];
+  }
   pctx.scopes.push(scope);
   return scope;
 }
@@ -721,8 +724,10 @@ function pop_scope(pctx) {
   return scope;
 }
 
-function add_stmt(stmt, pctx, top) {
-  function _add_stmt(stmt, index) {
+function add_stmt(stmt, pctx) {
+  var scope = current_scope(pctx);
+  var top = scope.top === scope;
+  function _add_stmt(stmt) {
     if (!stmt) {
       console.warn("NUll stmt: " + stmt);
       return;
@@ -733,11 +738,10 @@ function add_stmt(stmt, pctx, top) {
         // NOTE: we give the same index to multiple toplevel assignments, because
         // they all come from the same statement (even though we track
         // them separately for dependency reasons)
-        _add_stmt(stmt[i], index);
+        _add_stmt(stmt[i]);
       }
       return;
     }
-    var scope = current_scope(pctx);
     if (top) {
       var container = pctx.current_stmt;
       container.set(stmt);
@@ -755,19 +759,20 @@ function add_stmt(stmt, pctx, top) {
               prop = root.name;
               root = root.parent;
             }
-            if (root === scope.exports) {
-              console.log("SCOPE: " + prop);
-              applyScope(container, 'exports.' + (prop || null));
-            } else if (root instanceof Variable) {
-              applyScope(container, root.name);
-            } else {
-              applyScope(container, null);
-            }
+          }
+
+          if (root === scope.exports) {
+            console.log("SCOPE: " + prop);
+            applyScope(container, 'exports.' + (prop || null));
+          } else if (root instanceof Variable) {
+            applyScope(container, assert(root.name));
+          } else {
+            applyScope(container, null);
           }
         }
       } else if (stmt instanceof Variable) {
         // toplevel var
-        applyScope(container, stmt.name);
+        applyScope(container, assert(stmt.name));
       } else {
         // non-assignments get toplevel scope
         console.log("Non-assignment: " + stmt);
@@ -782,10 +787,10 @@ function add_stmt(stmt, pctx, top) {
         applyScope(stmt, null);
       }
     }
-    stmt.index = index;
+    stmt.index = pctx.stmt_index;
     scope.stmts.push(stmt);
   };
-  _add_stmt.call(this, stmt, pctx.stmt_index++);
+  _add_stmt.call(this, stmt);
 };
 
 function current_scope(pctx) {
@@ -808,7 +813,7 @@ function current_scope(pctx) {
   pctx.export_scopes = {};                                   \
   init_toplevel(pctx);
 
-#define ADD_SCRIPT_STMT(stmt, pctx) add_stmt(stmt, pctx, true);
+#define ADD_SCRIPT_STMT(stmt, pctx) add_stmt(stmt, pctx); pctx.stmt_index++;
 
 #define END_SCRIPT(pctx)                        \
   return process_script(pctx);
@@ -820,13 +825,13 @@ function current_scope(pctx) {
 // XXX should we distinguish fbody block from standard block, to e.g
 // treat statements as toplevel even when they appea under if(hostenv === 'xbrowser') { ... }
 
-#define END_FBODY(pctx,dummy) console.log("END_FBODY: " + str(current_scope(pctx))); return new FunctionDef(pop_scope(pctx));
+#define END_FBODY(pctx,dummy) console.log("END_FBODY: " + str(current_scope(pctx))); pop_scope(pctx); return Dynamic;
 
 #define BEGIN_BLOCK(pctx) push_scope(pctx);
 
 #define ADD_BLOCK_STMT(stmt, pctx) add_stmt(stmt, pctx);
 
-#define END_BLOCK(pctx) console.log("END_BLOCK: " + str(current_scope(pctx))); pop_scope(pctx); return Dynamic;
+#define END_BLOCK(pctx) console.log("END_BLOCK: " + str(current_scope(pctx))); return new Block(pop_scope(pctx));
 
 #define BEGIN_CASE_CLAUSE(cexp, pctx) /* */
 
@@ -857,7 +862,7 @@ function current_scope(pctx) {
 
 #define GEN_FUN_DECL(fname, pars, body, pctx) \
   var v = current_scope(pctx).add_var(fname); \
-  return new Assignment(v, '=', new FunctionDef(body), pctx);
+  return new Assignment(v, '=', body, pctx);
 
 #define GEN_VAR_DECL(decls, pctx)                                 \
   var rv=[];                                                      \
@@ -980,9 +985,9 @@ function gen_crf(crf) {
 #define GEN_SUSPEND(has_var, decls, block, crf, pctx)  return block;
 #define GEN_COLLAPSE(pctx) /* */
 #define GEN_USING(has_var, lhs, exp, body, pctx)  return body;
-#define BEGIN___JS_BLOCK(pctx)
-#define END___JS_BLOCK(pctx)
-#define GEN___JS(body, pctx) return Dynamic;
+#define BEGIN___JS_BLOCK(pctx) console.log("START JS BLOCK"); pctx.suppress_next_block = true;
+#define END___JS_BLOCK(pctx) console.log("END_JS");
+#define GEN___JS(body, pctx) return body;
 #define GEN_BLOCKLAMBDA(pars, body, pctx) return Dynamic;
 
 

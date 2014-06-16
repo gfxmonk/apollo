@@ -529,7 +529,6 @@ var applyScope = (function() {
     // assert(obj.exportScope === undefined, "can't scope " + obj + " to " + scope + " - already scoped to " + obj.exportScope);
     console.log("SCOPE(" + str(scope) + "): " + str(obj));
     obj.exportScope.push(scope);
-    obj.traverse(function(child) { inner(child, scope); });
   };
   return function(obj, scope) {
     assert(typeof(scope) === 'string' || scope === null, "not a string: " + scope);
@@ -546,7 +545,6 @@ var Dynamic = {
 
   // scope:
   exportScope: undefined,
-  traverse: function(f) { },
 
   // values
   staticValue: Nothing,                 // statically-determined value (an eval()-able string)
@@ -554,6 +552,16 @@ var Dynamic = {
   flatten: function() { return []; },   // Return all non-dynamic children
   toString: function() { return "Dynamic()"; },
 };
+
+function Block(scope) {
+  this.scope = scope;
+};
+Block.prototype = Object.create(Dynamic);
+Block.prototype.merge = false; // merge with parent block upon completion
+Block.prototype.toString = function() {
+  return "Block{"+str(this.scope.stmts)+"}";
+};
+
 
 var Property = function(parent, text, pctx) {
   this.parent = parent;
@@ -677,9 +685,6 @@ Statement.prototype.remove_reference = function(ref) {
 Statement.prototype.set = function(stmt) {
   if (this.stmt) throw new Error("Can't re-assign " + this.stmt + " to " + stmt);
   this.stmt = stmt;
-};
-Statement.prototype.traverse = function(f) {
-  this.stmt.traverse(f);
 };
 
 Statement.prototype.calculateDependencies = function(toplevel) {
@@ -840,17 +845,6 @@ Assignment.prototype.scopeTo = function(name) {
   this.right.scopeTo(name);
 };
 
-var FunctionDef = function(scope) {
-  this.scope = scope;
-};
-FunctionDef.prototype = Object.create(Dynamic);
-FunctionDef.prototype.toString = function() {
-  return "Function(" + str(this.scope) + ")";
-};
-FunctionDef.traverse = function(f) {
-  f(this.scope);
-};
-
 // A sequence of AST nodes (well, just two - successive sequences form a stick)
 var Seq = function(a,b) {
   this.a = a;
@@ -1000,8 +994,17 @@ function init_toplevel(pctx) {
 function push_scope(pctx) {
   console.log("++ SCOPE");
   var parent = current_scope(pctx);
-  var scope = new Scope(parent, pctx);
-  scope.top = pctx.scopes[0];
+  var scope;
+  if (pctx.suppress_next_block) {
+    // hack: duplicate current scope so that
+    // it's effectively merged, and
+    // pop_scope doesn't freak out
+    delete pctx.suppress_next_block;
+    scope = parent;
+  } else {
+    scope = new Scope(parent, pctx);
+    scope.top = pctx.scopes[0];
+  }
   pctx.scopes.push(scope);
   return scope;
 }
@@ -1012,8 +1015,10 @@ function pop_scope(pctx) {
   return scope;
 }
 
-function add_stmt(stmt, pctx, top) {
-  function _add_stmt(stmt, index) {
+function add_stmt(stmt, pctx) {
+  var scope = current_scope(pctx);
+  var top = scope.top === scope;
+  function _add_stmt(stmt) {
     if (!stmt) {
       console.warn("NUll stmt: " + stmt);
       return;
@@ -1024,11 +1029,10 @@ function add_stmt(stmt, pctx, top) {
         // NOTE: we give the same index to multiple toplevel assignments, because
         // they all come from the same statement (even though we track
         // them separately for dependency reasons)
-        _add_stmt(stmt[i], index);
+        _add_stmt(stmt[i]);
       }
       return;
     }
-    var scope = current_scope(pctx);
     if (top) {
       var container = pctx.current_stmt;
       container.set(stmt);
@@ -1046,19 +1050,20 @@ function add_stmt(stmt, pctx, top) {
               prop = root.name;
               root = root.parent;
             }
-            if (root === scope.exports) {
-              console.log("SCOPE: " + prop);
-              applyScope(container, 'exports.' + (prop || null));
-            } else if (root instanceof Variable) {
-              applyScope(container, root.name);
-            } else {
-              applyScope(container, null);
-            }
+          }
+
+          if (root === scope.exports) {
+            console.log("SCOPE: " + prop);
+            applyScope(container, 'exports.' + (prop || null));
+          } else if (root instanceof Variable) {
+            applyScope(container, assert(root.name));
+          } else {
+            applyScope(container, null);
           }
         }
       } else if (stmt instanceof Variable) {
         // toplevel var
-        applyScope(container, stmt.name);
+        applyScope(container, assert(stmt.name));
       } else {
         // non-assignments get toplevel scope
         console.log("Non-assignment: " + stmt);
@@ -1073,10 +1078,10 @@ function add_stmt(stmt, pctx, top) {
         applyScope(stmt, null);
       }
     }
-    stmt.index = index;
+    stmt.index = pctx.stmt_index;
     scope.stmts.push(stmt);
   };
-  _add_stmt.call(this, stmt, pctx.stmt_index++);
+  _add_stmt.call(this, stmt);
 };
 
 function current_scope(pctx) {
@@ -1652,7 +1657,7 @@ function parseBlock(pctx) {
   }
   scan(pctx, "}");
   
-  console.log("END_BLOCK: " + str(current_scope(pctx))); pop_scope(pctx); return Dynamic;
+  console.log("END_BLOCK: " + str(current_scope(pctx))); return new Block(pop_scope(pctx));
 }
 
 function parseBlockLambdaBody(pctx) {
@@ -1755,7 +1760,7 @@ function parseFunctionBody(pctx, implicit_return) {
   }
   scan(pctx, "}");
   
-  console.log("END_FBODY: " + str(current_scope(pctx))); return new FunctionDef(pop_scope(pctx));
+  console.log("END_FBODY: " + str(current_scope(pctx))); pop_scope(pctx); return Dynamic;
 }
 
 function parseFunctionParam(pctx) {
@@ -1817,7 +1822,7 @@ S("function").
     var pars = parseFunctionParams(pctx);
     var body = parseFunctionBody(pctx);
     
-    var v = current_scope(pctx).add_var(fname);   return new Assignment(v, '=', new FunctionDef(body), pctx);
+    var v = current_scope(pctx).add_var(fname);   return new Assignment(v, '=', body, pctx);
   });
 
 S("this", TOKENIZER_OP).exs(function(pctx) {  return current_scope(pctx).get_var("this"); });
@@ -2297,12 +2302,12 @@ S("using").stmt(function(pctx) {
 
 S("__js").stmt(function(pctx) {
   
-  
+  console.log("START JS BLOCK"); pctx.suppress_next_block = true;
   var body = parseStmt(pctx);
   
+  console.log("END_JS");
   
-  
-  return Dynamic;
+  return body;
 });
 
 
@@ -2388,7 +2393,7 @@ function parseScript(pctx) {
   while (pctx.token.id != "<eof>") {
     var stmt = parseStmt(pctx);
     
-    add_stmt(stmt, pctx, true);;
+    add_stmt(stmt, pctx); pctx.stmt_index++;;
   }
   return process_script(pctx);
 }
