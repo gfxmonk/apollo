@@ -331,32 +331,43 @@ var str = function(obj) {
 };
 var assert = function(cond, desc) { if (!cond) throw new Error(desc || "Assertion failed"); return cond };
 
-function ModuleImports(args) {
-  this.args = args;
-};
-ModuleImports.prototype.toString = function() {
-  return "ModuleImports(" + str(this.args) + ")";
-};
-
 function Scope(parent, pctx) {
   this._parent = parent;
   this.variables = {};
   this.stmts = [];
   this.children = [];
   this.pctx = pctx;
+  this._this_var = new Variable('this', this);
   if (parent) parent.children.push(this);
 };
 Scope.prototype.toString = function() {
   return "Scope(" + str(this.variables) + ")";
 }
 Scope.prototype.add_var = function(name) {
-  if (name instanceof Id) {
+  if (name instanceof ObjectLit) {
+    // destructuring object
+    for (var i = 0; i<name.props; i++) {
+      this.add_var(name.props[i][1]);
+    }
+    return;
+  } else if (name instanceof ArrayLit) {
+    // destructuring array
+    for (var i=0; i<name.arr.length; i++) {
+      this.add_var(name.arr[i]);
+    }
+    return;
+  } else if (name instanceof Id) {
     name = name.name;
   }
   if (typeof(name) !== 'string') {
     throw new Error("weird name: " + str(name) + " // " + typeof(name));
   }
-  assert(!Object.prototype.hasOwnProperty.call(this.variables, name), "variable defined twice: " + name);
+
+  if(Object.prototype.hasOwnProperty.call(this.variables, name)) {
+    console.warn("variable defined twice: " + name);
+    return this.variables[name];
+  }
+
   var ident = new Variable(name, this)
   this.variables[name] = ident;
   console.log("VARIABLE: " + name + " // " + this);
@@ -365,8 +376,9 @@ Scope.prototype.add_var = function(name) {
 Scope.prototype.get_var = function(v) {
   assert(typeof(v) === 'string', "non-string variable: " + v);
   if (v === 'this') {
-    // there's a `this` in every scope, but it does nothing
-    return new Id('this', this);
+    // there's a `this` in every scope, but it doesn't affect
+    // dependencies
+    return this._this_var;
   }
   if (Object.prototype.hasOwnProperty.call(this.variables, v)) {
     return new Ref(this.variables[v], this.pctx);
@@ -391,24 +403,6 @@ ExportScope.prototype.toString = function() {
   return "ExportScope(" + this.name + ", " + str(this.dependencies) + ")";
 }
 
-// var ExportScope = function(parent, symbol) {
-//   this._parent = parent;
-//   this._symbol = symbol;
-//   this.requirements = [];
-//   this.dependency_filters = [];
-//   this.clone = function() {
-//     return new ExportScope(this);
-//   }
-// }
-// ExportScope.prototype.set = function(sym) {
-//   this._symbol = sym;
-// };
-// 
-// ExportScope.prototype.symbol = function() {
-//   if (this._symbol) return this._symbol;
-//   return this._parent ? this._parent.symbol() : null;
-// };
-//
 function ModuleReference(module, property) {
   this.module = module;
   this.property = property;
@@ -531,9 +525,10 @@ var flattenAnyM = function(arr) {
 
 var applyScope = (function() {
   var inner = function(obj, scope) {
-    assert(obj.exportScope === undefined, "can't scope " + obj + " to " + scope + " - already scoped to " + obj.exportScope);
-    console.log("SCOPE[" + scope + "]: " + str(obj));
-    obj.exportScope = scope;
+    if (!obj.exportScope) obj.exportScope = [];
+    // assert(obj.exportScope === undefined, "can't scope " + obj + " to " + scope + " - already scoped to " + obj.exportScope);
+    console.log("SCOPE(" + str(scope) + "): " + str(obj));
+    obj.exportScope.push(scope);
     obj.traverse(function(child) { inner(child, scope); });
   };
   return function(obj, scope) {
@@ -646,7 +641,10 @@ Ref.prototype.staticValue = function() {
 };
 
 Ref.prototype.dot = function(name) {
+  // since references are not shared, dotting a reference must mean
+  // that the code _only_ accesses <foo>.prop, and not <foo> itself.
   var underlying = this.dest.dot(name);
+  this.pctx.current_stmt.remove_reference(this);
   return new Ref(underlying, this.pctx);
 };
 
@@ -660,20 +658,21 @@ Ref.prototype.toString = function() { return "Ref(" + this.dest + ")"; };
 var Statement = function() {
   this.references = [];
   this.dependencies = [];
+  this.moduleDependencies = [];
   this.stmt = null;
 }
 Statement.prototype = Object.create(Dynamic);
-// // Statement passes all methods onto the underlying stmt
-// Object.keys(Statement.prototype).forEach(function(k) {
-//   Statement.prototype[k] = function() {
-//     return this.stmt[k].apply(this.stmt, arguments);
-//   }
-// });
 Statement.prototype.toString = function() {
   return 'Stmt{'+this.stmt.toString() +'}';
 };
 Statement.prototype.add_reference = function(ref) {
   this.references.push(ref);
+};
+Statement.prototype.remove_reference = function(ref) {
+  var idx = this.references.indexOf(ref);
+  if (idx === -1)
+    throw new Error("Can't find reference: " + ref + " in list: " + str(this.references));
+  this.references.splice(idx, 1);
 };
 Statement.prototype.set = function(stmt) {
   if (this.stmt) throw new Error("Can't re-assign " + this.stmt + " to " + stmt);
@@ -683,14 +682,15 @@ Statement.prototype.traverse = function(f) {
   this.stmt.traverse(f);
 };
 
-Statement.prototype.calculateDependencies = function(stmts) {
-  this.calculateDirectDependencies(stmts);
-  this.expandDependencies();
+Statement.prototype.calculateDependencies = function(toplevel) {
+  this.calculateDirectDependencies(toplevel);
+  // this.expandDependencies();
 };
 
-Statement.prototype.calculateDirectDependencies = function(stmts) {
-  var changed = false;
-  // console.log("--- EXPAND: " + this);
+Statement.prototype.calculateDirectDependencies = function(toplevel) {
+  var stmts = toplevel.stmts;
+  
+  // statement dependencies:
   for (var i = 0; i < stmts.length; i++) {
     var stmt = stmts[i];
     if(stmt === this) continue;
@@ -703,18 +703,66 @@ Statement.prototype.calculateDirectDependencies = function(stmts) {
         // reference to a toplevel variable
         if (this.dependencies.indexOf(stmt) == -1) {
           this.dependencies.push(stmt);
-          changed = true;
         }
       }
     }
   }
-  return changed;
+
+  function determineModuleReferences(node, scope) {
+    var module = null;
+    scope = scope || null;
+
+    console.log("Checking reference " + node);
+    while(true) {
+      if (node instanceof Property) {
+        // keep traversing parent
+        scope = node.name;
+        node = node.parent;
+      } else if (node instanceof Call) {
+        console.log("Checking call of: " + node.expr);
+        if (node.expr === toplevel.require) {
+          return node.staticArgs().map(function(args) {
+            console.log("yup! require call");
+            return [new ModuleReference(args, scope)];
+          }).getLazy(function() {
+            console.log("require call with dynamic args");
+            return [];
+          });
+        } else {
+          // not a require call - but maybe a property of some required module:
+          scope = null;
+          node = node.expr;
+        }
+      } else if (node instanceof Variable) {
+        var rv = [];
+        for (var valIdx = 0; valIdx < node.values.length; valIdx++) {
+          rv = rv.concat(determineModuleReferences(node.values[valIdx], scope));
+        }
+        return rv;
+      } else {
+        console.log("unknown thing! " + node);
+        module = null;
+        return [];
+      }
+    }
+  }
+
+  // module dependencies:
+  for (var i = 0; i < this.references.length; i++) {
+    var node = this.references[i].dest;
+    this.moduleDependencies = this.moduleDependencies.concat(determineModuleReferences(node));
+  }
 };
 
 Statement.prototype.expandDependencies = function() {
   var self = this;
   var seen = [];
   var traverse = function(stmt) {
+    if (!(stmt instanceof Statement)) {
+      console.log("ignoring non-stmt: " + str(stmt));
+      return;
+    }
+    // TODO: add moduleDependencies
     for (var i=0; i<stmt.dependencies.length; i++) {
       var dep = stmt.dependencies[i];
       if (dep === self) return;
@@ -736,12 +784,49 @@ var Assignment = function(l, op, r, pctx) {
   }
   this.left = l;
   this.op = op;
-  this.right = r;
+  this.right = r || Dynamic;
   var scope = current_scope(pctx);
-  if (l instanceof Variable || l instanceof Property) {
-    this.provides = [l];
-    if (this.op === '=') this.left.assign(this.right);
+  var provides = this.provides = [];
+  var isAssignment = op === '=';
+
+  var provide = function(l, r) {
+    console.log("providing: " + str(l));
+    if (l instanceof Id) {
+      l = current_scope(pctx).add_var(l.name);
+    }
+    if (l instanceof Variable || l instanceof Property) {
+      provides.push(l);
+      if (isAssignment) l.assign(r);
+    } else if (l instanceof ObjectLit) {
+      for (var i=0; i<l.props.length; i++) {
+        var par = l.props[i];
+        var key = par[1];
+        console.log("GOT PAR: ", str(key));
+        // var _l = par[0];
+        if (par.length == 1) {
+          // shorthand x -> x:x
+          key = par[0];
+        }
+        var _r = new Property(r, key);
+        provide(key, _r);
+      }
+    } else if (l instanceof ArrayLit) {
+      for (var i=0; i<l.arr.length; i++) {
+        var _l = l.arr[i];
+        var _r = Dynamic;
+        // if rhs is an arrayLit as well, we can actually associate
+        // l & r pairs
+        if (r instanceof ArrayLit) {
+          _r = r.arr[i] || new Lit("undefined");
+        }
+        provide(_l, _r);
+      }
+    } else {
+      console.log("Don't know how to provide lvalue: " + l);
+    }
   }
+  provide(l,r);
+  console.log("assignment " + str(this) + " provides " + str(this.provides));
 }
 Assignment.prototype = Object.create(Dynamic);
 Assignment.prototype.toString = function() {
@@ -753,12 +838,6 @@ Assignment.prototype.scopeTo = function(name) {
   assert(typeof(name) === 'string', "not a string: " + name);
   this.exportScope = Some(name);
   this.right.scopeTo(name);
-};
-
-// A reference to an exported symbol
-var ModuleReference = function(module, symbol) {
-  this.module = module; // either `null` for the current mod, or an array of module names
-  this.symbol = symbol;
 };
 
 var FunctionDef = function(scope) {
@@ -859,27 +938,46 @@ ArrayLit.prototype.staticValue = function() {
 };
 ArrayLit.prototype.toString = function() {
   var join = function(vals) { return vals.join(","); };
-  return "[" + this.staticValue().map(join) + "]";
+  return "ArrayLit" + str(this.arr);
 };
 
 // an Object literal
-var ObjectLit = function(pars) {
-  this.pars = pars;
+var ObjectLit = function(spec, pctx) {
+  var props = this.props = [];
+  var scope = current_scope(pctx);
+
+  for (var i=0; i<spec.length; ++i) {
+    var def = spec[i];
+    def[1] = new Id(def[1], scope);
+    if (def[0] == "prop") {
+      props.push([def[1], def[2]]);
+    } else if (def[0] == "pat") {
+      var value = def[1];
+      var key = def[2];
+      if (def.length == 3) {
+        // shorthand "prop" for "prop:prop"
+        key = def[1];
+      }
+      props.push([key, value]);
+    }
+  }
+  console.log("GEN_OBJ_LIT: " + str(props));
   // console.log(" # " + this);
 }
 ObjectLit.prototype = Object.create(Dynamic);
 ObjectLit.prototype.staticValue = function() {
-  var pars = this.pars;
+  var props = this.props;
   var obj = {};
-  for (var i=0; i<pars.length; i++) {
-    var elem = pars[i];
+  //XXX
+  for (var i=0; i<props.length; i++) {
+    var elem = props[i];
     elem[1].staticValue().map(function(v) {
       obj[elem[0]] = v;
     });
   }
   return Just(obj);
 };
-ObjectLit.prototype.toString = function() { return "JSON(" + this.staticValue().map(JSON.stringify) + ")"; };
+ObjectLit.prototype.toString = function() { return "ObjectLit(" + str(this.props) + ")"; };
 
 
 function init_toplevel(pctx) {
@@ -932,20 +1030,25 @@ function add_stmt(stmt, pctx, top) {
     pctx.current_stmt = new Statement();
 
     if (stmt instanceof Assignment) {
-      console.log("Assignment to: " + stmt.left);
-      var root = stmt.left.dest;
-      console.log("root : " + root);
-      if (root instanceof Property) {
-        var prop = null;
-        while(root instanceof Property) {
-          prop = root.name;
-          root = root.parent;
-        }
-        if (root instanceof Variable) {
-          console.log("SCOPE: " + prop);
-          applyScope(container, 'exports.' + (prop || null));
-        } else {
-          applyScope(container, null);
+      console.log("Assignment to: " + str(stmt.provides));
+      for (var p = 0; p<stmt.provides.length; p++) {
+        var provided = stmt.provides[p];
+        var root = provided;
+        console.log("root : " + root);
+        if (root instanceof Property) {
+          var prop = null;
+          while(root instanceof Property) {
+            prop = root.name;
+            root = root.parent;
+          }
+          if (root === scope.exports) {
+            console.log("SCOPE: " + prop);
+            applyScope(container, 'exports.' + (prop || null));
+          } else if (root instanceof Variable) {
+            applyScope(container, root.name);
+          } else {
+            applyScope(container, null);
+          }
         }
       }
     } else if (stmt instanceof Variable) {
@@ -985,6 +1088,9 @@ function current_scope(pctx) {
 
 
 
+
+// XXX should we distinguish fbody block from standard block, to e.g
+// treat statements as toplevel even when they appea under if(hostenv === 'xbrowser') { ... }
 
 
 
@@ -1344,7 +1450,7 @@ S(".").exc(270, function(l, pctx) {
   var name = pctx.token.value;
   scan(pctx);
   
-  console.log("DOTTING:"+l + "." + name + " -> " + l.dot(name));return l.dot(name);
+  console.log("DOTTING:"+l + "." + name);return l.dot(name);
 });
 
 S("new").exs(function(pctx) {
@@ -1538,7 +1644,7 @@ function parseBlock(pctx) {
   }
   scan(pctx, "}");
   
-  console.log("END_BLOCK: " + str(current_scope(pctx))); return pop_scope(pctx);
+  console.log("END_BLOCK: " + str(current_scope(pctx))); pop_scope(pctx); return Dynamic;
 }
 
 function parseBlockLambdaBody(pctx) {
@@ -1601,7 +1707,7 @@ S("{").
       }
       scan(pctx, "}", TOKENIZER_OP); // note the special tokenizer case here
       
-      var rv = [];                                 for (var i=0; i<props.length; ++i) {           if (props[i][0] == "prop") {                   rv.push([props[i][1], props[i][2]]);       }                                          }                                            return new ObjectLit(rv);
+      return new ObjectLit(props, pctx);
     }
   }).
   // block lambda call:
@@ -1875,7 +1981,7 @@ S("var").stmt(function(pctx) {
   var decls = parseVarDecls(pctx);
   parseStmtTermination(pctx);
   
-  var rv=[];                                                 for (var i=0; i<decls.length; ++i) {                         console.log("GEN_VAR " + str(decls[i]));                   var v = current_scope(pctx).add_var(decls[i][0].name);     if (decls[i].length == 2) {                                  rv.push(new Assignment(v, '=', decls[i][1], pctx));      } else {                                                     rv.push(v);                                              }                                                        };                                                         return rv;
+  var rv=[];                                                        for (var i=0; i<decls.length; ++i) {                                console.log("GEN_VAR " + str(decls[i][0]));                       current_scope(pctx).add_var(decls[i][0], decls[i][1]);            rv.push(new Assignment(decls[i][0], '=', decls[i][1], pctx));   };                                                                return rv;
 });
 
 S("else");
@@ -2254,16 +2360,17 @@ function compile(src, settings) {
   // wins performance-wise:
 
   var pctx = makeParserContext(src+"\n", settings);
-  // try {
+  try {
     return parseScript(pctx);
-  // }
-  // catch (e) {
-  //   var mes = e.mes || e;
-  //   var line = e.line || pctx.line;
-  //   var exception = new Error("SJS syntax error "+(pctx.filename?"in "+pctx.filename+",": "at") +" line " + line + ": " + mes);
-  //   exception.compileError = {message: mes, line: line};
-  //   throw exception;
-  // }
+  }
+  catch (e) {
+    var mes = e.mes || e;
+    mes += "\n"+e.stack;
+    var line = e.line || pctx.line;
+    var exception = new Error("SJS syntax error "+(pctx.filename?"in "+pctx.filename+",": "at") +" line " + line + ": " + mes);
+    exception.compileError = {message: mes, line: line};
+    throw exception;
+  }
 }
 exports.compile = compile;
 

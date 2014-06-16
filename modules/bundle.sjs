@@ -133,7 +133,6 @@ var shouldExcude = function(path, patterns) {
 */
 function findDependencies(sources, settings) {
   settings = sanitizeOpts(settings);
-  var deps = {};
   var resources = settings.resources;
   var hubs = settings.hubs;
   var excludes = settings.ignore;
@@ -158,13 +157,36 @@ function findDependencies(sources, settings) {
   }
 
   var usedHubs = {};
+  var modules = {};
 
-  function addRequire(requireName, parent) {
+  function includeAllStatements() { return true; };
+  includeAllStatements.add = function() {};
+
+  function StatementFilter() {
+    var indexes = []; // sparse array of booleans
+    var rv = function(index) {
+      assert.notEq(index, undefined);
+      return indexes[index] === true;
+    };
+    rv.add = function(stmt) {
+      if(!indexes .. object.hasOwn(stmt.index)) {
+        indexes[stmt.index] = true;
+      }
+    };
+    return rv;
+  };
+
+  // map of module_id -> ([stmts] | null)
+  var requirements = {};
+
+  function loadModule(requireName, parent) {
     if (shouldExcude(requireName, excludes)) return;
 
     logging.verbose("Processing: " + requireName);
     var module = {
-      deps: [],
+      exports: [],
+      stmts: [],
+      statementFilter: StatementFilter(),
       loaded: false,
     };
 
@@ -189,15 +211,15 @@ function findDependencies(sources, settings) {
     }
 
     if (shouldExcude(requireName, excludes)) return;
-    if (parent && parent.deps) parent.deps.push(resolved.path);
+    //if (parent && parent.deps) parent.deps.push(resolved.path);
 
-    if (deps .. object.hasOwn(resolved.path)) {
+    if (modules .. object.hasOwn(resolved.path)) {
       logging.debug("(already processed)");
-      return;
+      return modules[resolved.path];
     }
     module.path = resolved.path;
     module.id = getId(resolved.path);
-    deps[module.path] = module;
+    modules[module.path] = module;
 
     try {
       src = resolved.src(resolved.path).src;
@@ -212,11 +234,14 @@ function findDependencies(sources, settings) {
       throw new Error("Error compiling " + resolved.path + ":\n" + e);
     }
     module.loaded = true;
+    module.stmts = metadata.toplevel.stmts;
+    module.statementFilter = new StatementFilter(module);
 
-    metadata.toplevel.stmts .. seq.each {|stmt|
-      stmt.calculateDependencies(metadata.toplevel.stmts);
-      console.log("Stmt: " + stmt);
-      console.log(" --- scope: " + stmt.exportScope);
+    metadata.toplevel.stmts .. seq.indexed .. seq.each {|[idx, stmt]|
+      stmt.index = idx;
+      console.log(" --- Stmt: " + stmt);
+      stmt.calculateDependencies(metadata.toplevel);
+      console.log(" - scope: " + stmt.exportScope);
       ;(stmt.stmt.provides || []) .. seq.each {|ref|
         console.log(" - provides:" + ref);
         ;(ref.values || []) .. seq.each {|ref|
@@ -226,67 +251,146 @@ function findDependencies(sources, settings) {
       stmt.dependencies .. seq.each {|ref|
         console.log(" - needs:" + ref);
       }
+
+      stmt.moduleDependencies .. seq.each {|ref|
+        console.log(" - needsMod:" + ref);
+      }
+
       stmt.references .. seq.each {|ref|
         console.log(" - references:" + ref);
       }
     }
 
+    //metadata.toplevel.variables .. object.ownPropertyPairs .. seq.each {|[k, v]|
+    //  console.log("var: " + k + " = " + v);
+    //}
+    //process.exit(1);
 
-    metadata.toplevel.variables .. object.ownPropertyPairs .. seq.each {|[k, v]|
-      console.log("var: " + k + " = " + v);
+    //metadata.statements .. seq.each {|[name, args]|
+    //  if (name === 'require') {
+    //    if (!isArrayLike(args[0])) {
+    //      addRequire(args[0], module);
+    //    }
+    //    else {
+    //      args[0] .. each {|arg|
+    //        if (typeof(arg) === 'string') {
+    //          addRequire(arg, module);
+    //        } else {
+    //          if (arg && arg.id) {
+    //            addRequire(arg.id, module);
+    //          }
+    //        }
+    //      }
+    //    }
+    //  }
+    //};
+
+    var docs = docutil.parseModuleDocs(src);
+    if(docs.require) {
+      logging.warn("TODO: infer some sort of requirements from docs");
+      docs.require .. each {|req|
+        loadModule(req, module);
+      }
     }
-    process.exit(1);
+    return module;
+  }
 
-    metadata.statements .. seq.each {|[name, args]|
-      if (name === 'require') {
-        if (!isArrayLike(args[0])) {
-          addRequire(args[0], module);
+  if (!strict) {
+    loadModule = relax(loadModule);
+  }
+
+  var seenStatements = [];
+  function addStatement(module, statement) {
+    if (seenStatements.indexOf(statement) !== -1) return;
+    seenStatements.push(statement);
+
+    module.statementFilter.add(statement);
+
+    statement.dependencies .. seq.each {|dep|
+      addStatement(module, dep);
+    }
+
+    statement.moduleDependencies .. seq.each {|moduleDep|
+      console.log("Adding moduleDependency: ", moduleDep);
+      if (moduleDep.module === undefined) continue;
+      var deps = [moduleDep.module];
+      if (Array.isArray(moduleDep.module)) {
+        deps = moduleDep.module;
+      }
+      deps .. seq.each {|moduleRef|
+        var id = moduleRef;
+        if (typeof(id) !== 'string') {
+          id = moduleRef.id;
+          if (!id) throw new Error("require() argument without \"id\":" + JSON.stringify(moduleRef));
         }
-        else {
-          args[0] .. each {|arg|
-            if (typeof(arg) === 'string') {
-              addRequire(arg, module);
-            } else {
-              if (arg && arg.id) {
-                addRequire(arg.id, module);
-              }
+        var depMod = loadModule(moduleRef, module);
+        if (!depMod) continue; // this will have already printed a warning
+        if (!moduleDep.property) {
+          logging.warn("can't remove dead code from " + id + " due to reference in " + module.id);
+          depMod.statementFilter = includeAllStatements;
+          depMod.exports.push('*');
+        } else {
+          depMod.exports.push(moduleDep.property);
+          depMod.stmts .. seq.each {|stmt|
+            if (stmt.exportScope .. seq.hasElem(null) || stmt.exportScope .. seq.hasElem(moduleDep.property)) {
+              addStatement(depMod, stmt);
             }
           }
         }
       }
-    };
-
-    var docs = docutil.parseModuleDocs(src);
-    if(docs.require) {
-      docs.require .. each {|req|
-        addRequire(req, module);
-      }
     }
-  }
-
-  if (!strict) {
-    addRequire = relax(addRequire);
   }
 
   var root = {
     path: url.fileURL(process.cwd()) + "/",
   };
   logging.debug("ROOT:", root);
-  sources .. each {|mod|
-    logging.debug("Adding source: #{mod}");
-    addRequire(mod, root);
+  sources .. map(function(mod) {
+    logging.debug("Loading module: #{mod}");
+    loadModule(mod, root);
+  }) .. each {|module|
+    if (!module) continue;
+    logging.debug("Adding all statements in: #{module.id}");
+    module.stmts .. seq.each {|stmt|
+      if (stmt.exportScope .. seq.hasElem(null)) {
+        addStatement(module, stmt);
+      }
+    }
   }
 
   // filter out usedHubs that didn't end up with any modules under them
   usedHubs .. ownKeys .. toArray() .. each {|h|
-    if (!deps .. ownValues .. any(v -> v.id && v.id .. startsWith(h))) {
+    if (!modules .. ownValues .. any(v -> v.id && v.id .. startsWith(h))) {
       delete usedHubs[h];
     }
   }
 
+  // remove unnecessary parts of `module` structure
+  modules .. object.ownValues .. seq.each {|mod|
+    var stmts = mod.stmts;
+    delete mod.stmts;
+
+    if (mod.statementFilter === includeAllStatements) {
+      mod.included = '*';
+    }
+      
+    var included_stmts = stmts .. seq.filter(function(s) {
+      console.log('STMT FILTER:', mod.statementFilter);
+      if (mod.statementFilter(s.index)) {
+        console.log("KEEP stmt: " + s);
+        return true;
+      } else {
+        console.log("SKIP stmt: " + s);
+      }
+    }) .. seq.count();
+    mod.included = included_stmts;
+    mod.excluded = stmts.length - included_stmts;
+    //mod.statements = mod.statementFilter.getLines ? mod.statementFilter.getLines() : 'ALL';
+  }
+
   return {
     hubs: usedHubs,
-    modules: deps,
+    modules: modules,
   };
 }
 exports.findDependencies = findDependencies;
