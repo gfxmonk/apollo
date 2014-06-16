@@ -164,13 +164,18 @@ function findDependencies(sources, settings) {
 
   function StatementFilter() {
     var indexes = []; // sparse array of booleans
+    var stmts = []; // XXX for debugging only
     var rv = function(index) {
       assert.notEq(index, undefined);
+      if (indexes[index] === true) {
+        console.log('KEEP[' + index + ']: ' + stmts[index]);
+      }
       return indexes[index] === true;
     };
     rv.add = function(stmt) {
       if(!indexes .. object.hasOwn(stmt.index)) {
         indexes[stmt.index] = true;
+        stmts[stmt.index] = stmt;
       }
     };
     return rv;
@@ -238,7 +243,6 @@ function findDependencies(sources, settings) {
     module.statementFilter = new StatementFilter(module);
 
     metadata.toplevel.stmts .. seq.indexed .. seq.each {|[idx, stmt]|
-      stmt.index = idx;
       console.log(" --- Stmt: " + stmt);
       stmt.calculateDependencies(metadata.toplevel);
       console.log(" - scope: " + stmt.exportScope);
@@ -372,19 +376,18 @@ function findDependencies(sources, settings) {
 
     if (mod.statementFilter === includeAllStatements) {
       mod.included = '*';
+    } else {
+      var included_stmts = stmts .. seq.filter(function(s) {
+        if (mod.statementFilter(s.index)) {
+          //console.log("KEEP stmt: " + s);
+          return true;
+        } else {
+          //console.log("SKIP stmt: " + s);
+        }
+      }) .. seq.count();
+      mod.included = included_stmts;
+      mod.excluded = stmts.length - included_stmts;
     }
-      
-    var included_stmts = stmts .. seq.filter(function(s) {
-      console.log('STMT FILTER:', mod.statementFilter);
-      if (mod.statementFilter(s.index)) {
-        console.log("KEEP stmt: " + s);
-        return true;
-      } else {
-        console.log("SKIP stmt: " + s);
-      }
-    }) .. seq.count();
-    mod.included = included_stmts;
-    mod.excluded = stmts.length - included_stmts;
     //mod.statements = mod.statementFilter.getLines ? mod.statementFilter.getLines() : 'ALL';
   }
 
@@ -422,15 +425,22 @@ function generateBundle(deps, settings) {
   var compile;
   if (settings.compile) {
     var compiler = require('./compile/sjs');
-    compile = function(src) {
-      var js = compiler.compile(src, {globalReturn:true, filename:"__onimodulename"});
+    compile = function(src, statementFilter) {
+      var js = compiler.compile(src, {
+        globalReturn:true,
+        filename:"__onimodulename",
+        statementFilter: statementFilter,
+      });
       return "function(#{require.extensions['sjs'].module_args.join(',')}) {
         #{js}
       }"
     }
   } else {
-    var stringifier = require('./compile/stringify');
-    compile = (src) -> stringifier.compile(src, {keeplines: true});
+    var stringifier = require('./compile/minify');
+    compile = (src, statementFilter) -> stringifier.compile(src, {
+      keeplines: true,
+      statementFilter: statementFilter,
+    });
   }
 
   var strict = settings.strict;
@@ -483,7 +493,7 @@ function generateBundle(deps, settings) {
 
       var initialSize = contents.length;
       logging.verbose("Compiling: #{dep.path}");
-      contents = compile(contents);
+      contents = compile(contents, dep.statementFilter);
       var minifiedSize = contents.length;
       var percentage = ((minifiedSize/initialSize) * 100).toFixed(2);
       logging.info("Bundled #{id} [#{percentage}%]");

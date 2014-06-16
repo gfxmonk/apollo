@@ -66,10 +66,19 @@ function flush_newlines(pctx) {
   if (typeof pctx.scopes !== 'undefined')                    \
     throw new Error("Internal parser error: Nested script"); \
   pctx.scopes = [];                                          \
+  pctx.stmt_index = 0;                                       \
   push_scope(pctx);
 
-#define ADD_SCRIPT_STMT(stmt, pctx)             \
-  top_scope(pctx).stmts.push(stmt+flush_newlines(pctx));
+var everything_but_newlines = /[^\r\n]/g;
+
+#define ADD_SCRIPT_STMT(stmt, pctx)                                            \
+  var stmt_str = stmt+flush_newlines(pctx);                                    \
+  if (!pctx.statementFilter || pctx.statementFilter(pctx.stmt_index++)) {      \
+    top_scope(pctx).stmts.push(stmt_str);                                      \
+    console.log("KEPT[" + (pctx.stmt_index-1) + "]: " + stmt_str); \
+  } else {                                                                     \
+    top_scope(pctx).stmts.push(stmt_str.replace(everything_but_newlines, '')); \
+  }
 
 #ifdef STRINGIFY
 #define END_SCRIPT(pctx)                        \

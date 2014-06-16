@@ -994,6 +994,7 @@ function init_toplevel(pctx) {
   Toplevel.module = constant('module');
   pctx.scopes = [Toplevel];
   pctx.current_stmt = new Statement();
+  pctx.stmt_index = 0;
 };
 
 function push_scope(pctx) {
@@ -1012,63 +1013,70 @@ function pop_scope(pctx) {
 }
 
 function add_stmt(stmt, pctx, top) {
-  if (!stmt) {
-    console.warn("NUll stmt: " + stmt);
-    return;
-  }
-  if(Array.isArray(stmt)) {
-    console.log("Adding " + stmt.length + " statements");
-    for (var i=0;i<stmt.length;i++) {
-      add_stmt(stmt[i], pctx, top);
+  function _add_stmt(stmt, index) {
+    if (!stmt) {
+      console.warn("NUll stmt: " + stmt);
+      return;
     }
-    return;
-  }
-  var scope = current_scope(pctx);
-  if (top) {
-    var container = pctx.current_stmt;
-    container.set(stmt);
-    pctx.current_stmt = new Statement();
+    if(Array.isArray(stmt)) {
+      console.log("Adding " + stmt.length + " statements");
+      for (var i=0;i<stmt.length;i++) {
+        // NOTE: we give the same index to multiple toplevel assignments, because
+        // they all come from the same statement (even though we track
+        // them separately for dependency reasons)
+        _add_stmt(stmt[i], index);
+      }
+      return;
+    }
+    var scope = current_scope(pctx);
+    if (top) {
+      var container = pctx.current_stmt;
+      container.set(stmt);
+      pctx.current_stmt = new Statement();
 
-    if (stmt instanceof Assignment) {
-      console.log("Assignment to: " + str(stmt.provides));
-      for (var p = 0; p<stmt.provides.length; p++) {
-        var provided = stmt.provides[p];
-        var root = provided;
-        console.log("root : " + root);
-        if (root instanceof Property) {
-          var prop = null;
-          while(root instanceof Property) {
-            prop = root.name;
-            root = root.parent;
-          }
-          if (root === scope.exports) {
-            console.log("SCOPE: " + prop);
-            applyScope(container, 'exports.' + (prop || null));
-          } else if (root instanceof Variable) {
-            applyScope(container, root.name);
-          } else {
-            applyScope(container, null);
+      if (stmt instanceof Assignment) {
+        console.log("Assignment to: " + str(stmt.provides));
+        for (var p = 0; p<stmt.provides.length; p++) {
+          var provided = stmt.provides[p];
+          var root = provided;
+          console.log("root : " + root);
+          if (root instanceof Property) {
+            var prop = null;
+            while(root instanceof Property) {
+              prop = root.name;
+              root = root.parent;
+            }
+            if (root === scope.exports) {
+              console.log("SCOPE: " + prop);
+              applyScope(container, 'exports.' + (prop || null));
+            } else if (root instanceof Variable) {
+              applyScope(container, root.name);
+            } else {
+              applyScope(container, null);
+            }
           }
         }
+      } else if (stmt instanceof Variable) {
+        // toplevel var
+        applyScope(container, stmt.name);
+      } else {
+        // non-assignments get toplevel scope
+        console.log("Non-assignment: " + stmt);
+        applyScope(container, null);
       }
-    } else if (stmt instanceof Variable) {
-      // toplevel var
-      applyScope(container, stmt.name);
-    } else {
-      // non-assignments get toplevel scope
-      console.log("Non-assignment: " + stmt);
-      applyScope(container, null);
-    }
 
-    stmt = container;
-    console.log("TOPLEVEL STMT: " + stmt);
+      stmt = container;
+      console.log("TOPLEVEL STMT: " + stmt);
 
-    if (stmt.exportScope === undefined) {
-      // all toplevel statements have a global exportScope by default
-      applyScope(stmt, null);
+      if (stmt.exportScope === undefined) {
+        // all toplevel statements have a global exportScope by default
+        applyScope(stmt, null);
+      }
     }
-  }
-  scope.stmts.push(stmt);
+    stmt.index = index;
+    scope.stmts.push(stmt);
+  };
+  _add_stmt.call(this, stmt, pctx.stmt_index++);
 };
 
 function current_scope(pctx) {
@@ -1809,7 +1817,7 @@ S("function").
     var pars = parseFunctionParams(pctx);
     var body = parseFunctionBody(pctx);
     
-    return Dynamic;
+    var v = current_scope(pctx).add_var(fname);   return new Assignment(v, '=', new FunctionDef(body), pctx);
   });
 
 S("this", TOKENIZER_OP).exs(function(pctx) {  return current_scope(pctx).get_var("this"); });

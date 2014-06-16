@@ -350,6 +350,8 @@ function flush_newlines(pctx) {
 // contexts:
 
 
+var everything_but_newlines = /[^\r\n]/g;
+
 
 
 
@@ -1718,12 +1720,12 @@ function compile(src, settings) {
 exports.compile = compile;
 
 function parseScript(pctx) {
-  if (typeof pctx.scopes !== 'undefined')                        throw new Error("Internal parser error: Nested script");   pctx.scopes = [];                                            push_scope(pctx);
+  if (typeof pctx.scopes !== 'undefined')                        throw new Error("Internal parser error: Nested script");   pctx.scopes = [];                                            pctx.statementIdx = 0;                                       push_scope(pctx);
   scan(pctx);
   while (pctx.token.id != "<eof>") {
     var stmt = parseStmt(pctx);
     
-    top_scope(pctx).stmts.push(stmt+flush_newlines(pctx));;
+    var stmt_str = stmt+flush_newlines(pctx);                                   if (!pctx.statementFilter || pctx.statementFilter(++pctx.statementIdx)) {     top_scope(pctx).stmts.push(stmt_str);                                     } else {                                                                      top_scope(pctx).stmts.push(pctx.replace(everything_but_newlines, ''));      console.log("Skipping: " + stmt);                                         };
   }
   return '"'+pop_scope(pctx).stmts.join("")+'"';
 }
