@@ -405,6 +405,7 @@ ExportScope.prototype.toString = function() {
 
 function ModuleReference(module, property) {
   this.module = module;
+  assert(property === null || typeof(property) === 'string', "Non-string module export reference:" + str(property));
   this.property = property;
 };
 ModuleReference.prototype.toString = function() {
@@ -648,11 +649,15 @@ Ref.prototype.staticValue = function() {
   return this.dest.staticValue();
 };
 
+Ref.prototype.deref = function() {
+  this.pctx.current_stmt.remove_reference(this);
+};
+
 Ref.prototype.dot = function(name) {
   // since references are not shared, dotting a reference must mean
   // that the code _only_ accesses <foo>.prop, and not <foo> itself.
   var underlying = this.dest.dot(name);
-  this.pctx.current_stmt.remove_reference(this);
+  this.deref();
   return new Ref(underlying, this.pctx);
 };
 
@@ -783,37 +788,76 @@ Statement.prototype.expandDependencies = function() {
   traverse(self);
 };
 
-var Assignment = function(l, op, r, pctx) {
-  if(l instanceof Ref) {
-    l = l.dest;
+var MultipleStatements = function(stmts) {
+  this.stmts = stmts;
+};
+MultipleStatements.prototype = Object.create(Dynamic);
+MultipleStatements.prototype.toString = function() {
+  return "MultipleStatements" + str(this.stmts);
+}
+MultipleStatements.wrap = function(stmts) {
+  if (stmts.length == 1) {
+    return stmts[0];
   }
+  return new MultipleStatements(stmts);
+}
+
+var Assignment = function(l, op, r, pctx) {
   this.left = l;
   this.op = op;
   this.right = r || Dynamic;
   var scope = current_scope(pctx);
   var provides = this.provides = [];
   var isAssignment = op === '=';
+  if (isAssignment) l.assign(r);
+  provides.push(l);
+}
+Assignment.prototype = Object.create(Dynamic);
+Assignment.prototype.toString = function() {
+  return "Assignment(" + str(this.left) + " " + this.op + " " + str(this.right) + ")";
+}
+Assignment.prototype.staticValue = function() { return this.right; };
+Assignment.prototype.scopeTo = function(name) {
+  assert(!this.exportScope, "already scoped: " + str(this));
+  assert(typeof(name) === 'string', "not a string: " + name);
+  this.exportScope = Some(name);
+  this.right.scopeTo(name);
+};
+
+function expand_assignment(l, op, r, pctx, stmts) {
+  // turn a single assignment into one or more primitive Assignment statements
+  stmts = stmts || [];
+
+  if(l instanceof Ref) {
+    l = l.dest;
+  }
+  var scope = current_scope(pctx);
+  var isAssignment = op === '=';
 
   var provide = function(l, r) {
     console.log("providing: " + str(l));
+    if (r instanceof Ref) {
+      // plain assignments don't count as a use - `r` is only used when
+      // `l` gets referenced / dotted / called
+      r.deref();
+      r = r.dest;
+    }
+
     if (l instanceof Id) {
       l = current_scope(pctx).add_var(l.name);
     }
     if (l instanceof Variable || l instanceof Property) {
-      provides.push(l);
-      if (isAssignment) l.assign(r);
+      stmts.push(new Assignment(l, op, r, pctx));
     } else if (l instanceof ObjectLit) {
       for (var i=0; i<l.props.length; i++) {
         var par = l.props[i];
-        var key = par[1];
-        console.log("GOT PAR: ", str(key));
-        // var _l = par[0];
-        if (par.length == 1) {
-          // shorthand x -> x:x
-          key = par[0];
-        }
-        var _r = new Property(r, key);
-        provide(key, _r);
+        assert(par.length === 2);
+        var _l = par[1];
+        var _r = par[0];
+        assert(_r instanceof Id, "Unexpected RHS in destructure pattern: " + _r);
+        _r = new Property(r, _r.name);
+        console.log("Assigning " + _l + " -> " + _r);
+        provide(_l, _r);
       }
     } else if (l instanceof ArrayLit) {
       for (var i=0; i<l.arr.length; i++) {
@@ -831,19 +875,9 @@ var Assignment = function(l, op, r, pctx) {
     }
   }
   provide(l,r);
-  console.log("assignment " + str(this) + " provides " + str(this.provides));
+  console.log("compound assignment " + str(stmts));
+  return stmts;
 }
-Assignment.prototype = Object.create(Dynamic);
-Assignment.prototype.toString = function() {
-  return "Assignment(" + str(this.left) + " " + this.op + " " + str(this.right) + ")";
-}
-Assignment.prototype.staticValue = function() { return this.right; };
-Assignment.prototype.scopeTo = function(name) {
-  assert(!this.exportScope, "already scoped: " + str(this));
-  assert(typeof(name) === 'string', "not a string: " + name);
-  this.exportScope = Some(name);
-  this.right.scopeTo(name);
-};
 
 // A sequence of AST nodes (well, just two - successive sequences form a stick)
 var Seq = function(a,b) {
@@ -995,7 +1029,7 @@ function push_scope(pctx) {
   console.log("++ SCOPE");
   var parent = current_scope(pctx);
   var scope;
-  if (pctx.suppress_next_block) {
+  if (pctx.suppress_next_block) { // TODO: use MultipleStatements block instead?
     // hack: duplicate current scope so that
     // it's effectively merged, and
     // pop_scope doesn't freak out
@@ -1023,6 +1057,11 @@ function add_stmt(stmt, pctx) {
       console.warn("NUll stmt: " + stmt);
       return;
     }
+
+    if (stmt instanceof MultipleStatements) {
+      stmt = stmt.stmts;
+    }
+
     if(Array.isArray(stmt)) {
       console.log("Adding " + stmt.length + " statements");
       for (var i=0;i<stmt.length;i++) {
@@ -1283,7 +1322,7 @@ SemanticToken.prototype = {
     this.excf = function(left, pctx) {
       var right = parseExp(pctx, bp);
       
-      console.log("ASSIGN_OP", str(left), this.id, str(right));   return new Assignment(left, this.id, right, pctx);
+      console.log("ASSIGN_OP", str(left), this.id, str(right));   return MultipleStatements.wrap(expand_assignment(left, this.id, right, pctx));
     };
     return this;
   },
@@ -1994,7 +2033,7 @@ S("var").stmt(function(pctx) {
   var decls = parseVarDecls(pctx);
   parseStmtTermination(pctx);
   
-  var rv=[];                                                        for (var i=0; i<decls.length; ++i) {                                console.log("GEN_VAR " + str(decls[i][0]));                       current_scope(pctx).add_var(decls[i][0], decls[i][1]);            rv.push(new Assignment(decls[i][0], '=', decls[i][1], pctx));   };                                                                return rv;
+  var stmts=[];                                                      for (var i=0; i<decls.length; ++i) {                                 console.log("GEN_VAR " + str(decls[i][0]));                        current_scope(pctx).add_var(decls[i][0], decls[i][1]);             expand_assignment(decls[i][0], '=', decls[i][1], pctx, stmts);   };                                                                 return MultipleStatements.wrap(stmts);
 });
 
 S("else");

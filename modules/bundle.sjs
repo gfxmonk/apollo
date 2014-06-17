@@ -316,74 +316,39 @@ function findDependencies(sources, settings) {
 
   function addModule(module, property, parent) {
     if (!module) return; // this will have already printed a warning
-    if (parent)
+    if (!settings.strip) property = null;
+    if (parent) {
       logging.verbose("Adding dependency on #{module.id}##{property} from #{parent.id}");
-    else
+    } else {
       logging.debug("Processing module: #{module.id}");
+      property = null;
+    }
+
+    if (module.exports .. seq.hasElem(property)) {
+      // already processed
+      return;
+    }
 
     module.required = true;
-
-    if (!settings.strip) property = null;
+    module.exports.push(property);
     addModuleAnnotations(module, property);
 
     if (property) {
-      if (module.exports .. seq.hasElem(property)) {
-        // already processed
-        return;
-      }
-      module.exports.push(property);
       module.stmts .. seq.each {|stmt|
         if (stmt.exportScope .. seq.hasElem(null) || stmt.exportScope .. seq.hasElem(property)) {
           addStatement(module, stmt);
         }
       }
     } else {
-      if (module.exports .. seq.hasElem('*')) {
-        // already processed
-        return;
-      }
       if (settings.strip && parent) {
         logging.warn(
           "can't remove dead code from " + module.id +
           " due to reference in " + parent.id);
       }
       module.statementFilter = includeAllStatements;
-      module.exports.push('*');
       module.stmts .. seq.each(stmt -> addStatement(module, stmt));
     }
   }
-
-  //function addModule(parent, ref, property) {
-  //  var depMod = loadModule(ref, parent);
-  //  if (!depMod) return; // this will have already printed a warning
-  //  logging.verbose("Adding dependency on #{ref}##{property} from #{parent.id}");
-
-  //  depMod.required = true;
-
-
-  //  if (!settings.strip) property = null;
-  //  addModuleAnnotations(depMod, property);
-
-  //  if (property) {
-  //    if (depMod.exports .. seq.hasElem(property)) {
-  //      // already processed
-  //      return;
-  //    }
-  //    depMod.exports.push(property);
-  //    depMod.stmts .. seq.each {|stmt|
-  //      if (stmt.exportScope .. seq.hasElem(null) || stmt.exportScope .. seq.hasElem(property)) {
-  //        addStatement(depMod, stmt);
-  //      }
-  //    }
-  //  } else {
-  //    if (settings.strip) {
-  //      logging.warn("can't remove dead code from " + depMod.id + " due to reference in " + parent.id);
-  //    }
-  //    depMod.statementFilter = includeAllStatements;
-  //    depMod.exports.push('*');
-  //    depMod.stmts .. seq.each(stmt -> addStatement(depMod, stmt));
-  //  }
-  //}
 
   var seenStatements = [];
   function addStatement(module, statement) {

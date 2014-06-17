@@ -147,4 +147,23 @@ context {||
     }
   }
 
+  test("TODOs") {||
+    assert.fail("IMPLEMENT ME!");
+    // To test:
+    //
+    //  - if a module references `exports` or `module.exports`, the entire
+    //    module should be exported
+    //
+    //  - test that dependencies are piped through `std` modules
+    //    e.g a dependency on <sjs:std>.prop gets mapped through to
+    //      <any-dep-of-std>.prop
+    //
+    //  - need to deal with special cases like:
+    //    require([{
+    //      id:foo,
+    //      name: foo
+    //    }]);
+    //
+  }
+
 }.serverOnly();
