@@ -364,7 +364,7 @@ Scope.prototype.add_var = function(name) {
   }
 
   if(Object.prototype.hasOwnProperty.call(this.variables, name)) {
-    console.warn("variable defined twice: " + name);
+    // console.warn("variable defined twice: " + name); // XXX
     return this.variables[name];
   }
 
@@ -386,7 +386,7 @@ Scope.prototype.get_var = function(v) {
   if (this._parent) {
     return this._parent.get_var(v);
   }
-  console.warn("global variable reference: " + v);
+  // console.warn("global variable reference: " + v); // XXX
   return new Ref(this.add_var(v), this.pctx);
 };
 

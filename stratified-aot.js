@@ -3020,9 +3020,12 @@ pctx.stmt_scopes=[];
 
 pctx.js_ctx=0;
 
+pctx.stmt_index=0;
+
 push_decl_scope(pctx);
 push_stmt_scope(pctx);
 }
+
 
 
 
@@ -5711,6 +5714,7 @@ return parseScript(pctx);
 }catch(e){
 
 var mes=e.mes||e;
+mes+="\n"+e.stack;
 var line=e.line||pctx.line;
 var exception=new Error("SJS syntax error "+(pctx.filename?"in "+pctx.filename+",":"at")+" line "+line+": "+mes);
 exception.compileError={message:mes,line:line};
@@ -5725,7 +5729,7 @@ scan(pctx);
 while(pctx.token.id!="<eof>"){
 var stmt=parseStmt(pctx);
 
-add_stmt(stmt,pctx);;
+if(!pctx.statementFilter||pctx.statementFilter(pctx.stmt_index++ ))add_stmt(stmt,pctx);;
 }
 return end_script(pctx);
 }
@@ -5916,7 +5920,6 @@ pctx.token=ST.lookup("quasi-"+matches[4]);
 }
 return pctx.token;
 }
-
 
 })(__oni_rt.c1={});if(!Array.isArray){
 

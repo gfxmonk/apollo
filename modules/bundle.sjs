@@ -191,8 +191,9 @@ function findDependencies(sources, settings) {
     var module = {
       exports: [],
       stmts: [],
-      statementFilter: StatementFilter(),
+      statementFilter: settings.strip ? StatementFilter() : includeAllStatements,
       loaded: false,
+      required: false,
     };
 
     var src;
@@ -240,6 +241,7 @@ function findDependencies(sources, settings) {
     }
     module.loaded = true;
     module.stmts = metadata.toplevel.stmts;
+    module.requireAnnotations = [];
     module.statementFilter = new StatementFilter(module);
 
     metadata.toplevel.stmts .. seq.indexed .. seq.each {|[idx, stmt]|
@@ -265,35 +267,32 @@ function findDependencies(sources, settings) {
       }
     }
 
-    //metadata.toplevel.variables .. object.ownPropertyPairs .. seq.each {|[k, v]|
-    //  console.log("var: " + k + " = " + v);
-    //}
-    //process.exit(1);
-
-    //metadata.statements .. seq.each {|[name, args]|
-    //  if (name === 'require') {
-    //    if (!isArrayLike(args[0])) {
-    //      addRequire(args[0], module);
-    //    }
-    //    else {
-    //      args[0] .. each {|arg|
-    //        if (typeof(arg) === 'string') {
-    //          addRequire(arg, module);
-    //        } else {
-    //          if (arg && arg.id) {
-    //            addRequire(arg.id, module);
-    //          }
-    //        }
-    //      }
-    //    }
-    //  }
-    //};
-
     var docs = docutil.parseModuleDocs(src);
+    if(docs.hostenv === 'nodejs') {
+      logging.verbose("Dropping nodejs module " + module.id);
+      return null;
+    }
+
     if(docs.require) {
       logging.warn("TODO: infer some sort of requirements from docs");
-      docs.require .. each {|req|
-        loadModule(req, module);
+
+      function addRequireAnnotations(exportScope, annotations) {
+        if (!annotations) return;
+        annotations .. seq.each {|req|
+          var [name, props] = req.split('#') .. seq.map(s -> s.trim());
+          if (props) props = deps.split(',') .. seq.map(s -> s.trim());
+          if (!module.requireAnnotations[exportScope]) {
+            module.requireAnnotations[exportScope] = [];
+          }
+          module.requireAnnotations[exportScope].push([name, props || null]);
+          loadModule(name, module);
+        }
+      }
+
+      addRequireAnnotations(null, docs.require);
+      docs.children .. object.ownPropertyPairs .. seq.each {|name, childDocs|
+        console.warn("CHILD: #{name} -- ", docs);
+        addRequireAnnotations(name, childDocs.require);
       }
     }
     return module;
@@ -302,6 +301,89 @@ function findDependencies(sources, settings) {
   if (!strict) {
     loadModule = relax(loadModule);
   }
+
+  function addModuleAnnotations(mod, property) {
+    mod.requireAnnotations .. object.ownPropertyPairs .. seq.each { |[exportScope, annotations]|
+      if (exportScope === null || exportScope === property) {
+        annotations .. seq.each {| [ref, props]|
+          props .. seq.each { |prop|
+            addModule(mod, ref, prop);
+          }
+        }
+      }
+    }
+  }
+
+  function addModule(module, property, parent) {
+    if (!module) return; // this will have already printed a warning
+    if (parent)
+      logging.verbose("Adding dependency on #{module.id}##{property} from #{parent.id}");
+    else
+      logging.debug("Processing module: #{module.id}");
+
+    module.required = true;
+
+    if (!settings.strip) property = null;
+    addModuleAnnotations(module, property);
+
+    if (property) {
+      if (module.exports .. seq.hasElem(property)) {
+        // already processed
+        return;
+      }
+      module.exports.push(property);
+      module.stmts .. seq.each {|stmt|
+        if (stmt.exportScope .. seq.hasElem(null) || stmt.exportScope .. seq.hasElem(property)) {
+          addStatement(module, stmt);
+        }
+      }
+    } else {
+      if (module.exports .. seq.hasElem('*')) {
+        // already processed
+        return;
+      }
+      if (settings.strip && parent) {
+        logging.warn(
+          "can't remove dead code from " + module.id +
+          " due to reference in " + parent.id);
+      }
+      module.statementFilter = includeAllStatements;
+      module.exports.push('*');
+      module.stmts .. seq.each(stmt -> addStatement(module, stmt));
+    }
+  }
+
+  //function addModule(parent, ref, property) {
+  //  var depMod = loadModule(ref, parent);
+  //  if (!depMod) return; // this will have already printed a warning
+  //  logging.verbose("Adding dependency on #{ref}##{property} from #{parent.id}");
+
+  //  depMod.required = true;
+
+
+  //  if (!settings.strip) property = null;
+  //  addModuleAnnotations(depMod, property);
+
+  //  if (property) {
+  //    if (depMod.exports .. seq.hasElem(property)) {
+  //      // already processed
+  //      return;
+  //    }
+  //    depMod.exports.push(property);
+  //    depMod.stmts .. seq.each {|stmt|
+  //      if (stmt.exportScope .. seq.hasElem(null) || stmt.exportScope .. seq.hasElem(property)) {
+  //        addStatement(depMod, stmt);
+  //      }
+  //    }
+  //  } else {
+  //    if (settings.strip) {
+  //      logging.warn("can't remove dead code from " + depMod.id + " due to reference in " + parent.id);
+  //    }
+  //    depMod.statementFilter = includeAllStatements;
+  //    depMod.exports.push('*');
+  //    depMod.stmts .. seq.each(stmt -> addStatement(depMod, stmt));
+  //  }
+  //}
 
   var seenStatements = [];
   function addStatement(module, statement) {
@@ -327,20 +409,7 @@ function findDependencies(sources, settings) {
           id = moduleRef.id;
           if (!id) throw new Error("require() argument without \"id\":" + JSON.stringify(moduleRef));
         }
-        var depMod = loadModule(moduleRef, module);
-        if (!depMod) continue; // this will have already printed a warning
-        if (!moduleDep.property) {
-          logging.warn("can't remove dead code from " + id + " due to reference in " + module.id);
-          depMod.statementFilter = includeAllStatements;
-          depMod.exports.push('*');
-        } else {
-          depMod.exports.push(moduleDep.property);
-          depMod.stmts .. seq.each {|stmt|
-            if (stmt.exportScope .. seq.hasElem(null) || stmt.exportScope .. seq.hasElem(moduleDep.property)) {
-              addStatement(depMod, stmt);
-            }
-          }
-        }
+        addModule(loadModule(id, module), moduleDep.property, module);
       }
     }
   }
@@ -352,16 +421,16 @@ function findDependencies(sources, settings) {
   sources .. map(function(mod) {
     logging.debug("Loading module: #{mod}");
     loadModule(mod, root);
-  }) .. each {|module|
-    if (!module) continue;
-    logging.debug("Adding all statements in: #{module.id}");
-    module.stmts .. seq.each {|stmt|
-      if (stmt.exportScope .. seq.hasElem(null)) {
-        addStatement(module, stmt);
-      }
+  }) .. each(addModule);
+
+  // filter out loaded modules that didn't end up being used
+  modules .. ownKeys .. toArray() .. each {|id|
+    if (!modules[id].required) {
+      logging.debug("Removing unused " + id);
+      delete modules[id];
     }
   }
-
+  
   // filter out usedHubs that didn't end up with any modules under them
   usedHubs .. ownKeys .. toArray() .. each {|h|
     if (!modules .. ownValues .. any(v -> v.id && v.id .. startsWith(h))) {
@@ -374,10 +443,13 @@ function findDependencies(sources, settings) {
     var stmts = mod.stmts;
     delete mod.stmts;
 
+    if (!settings.strip) continue;
+
+    var strip = mod.strip = {};
     if (mod.statementFilter === includeAllStatements) {
-      mod.included = '*';
+      strip.included = stmts.length;
     } else {
-      var included_stmts = stmts .. seq.filter(function(s) {
+      strip.included = stmts .. seq.filter(function(s) {
         if (mod.statementFilter(s.index)) {
           //console.log("KEEP stmt: " + s);
           return true;
@@ -385,10 +457,8 @@ function findDependencies(sources, settings) {
           //console.log("SKIP stmt: " + s);
         }
       }) .. seq.count();
-      mod.included = included_stmts;
-      mod.excluded = stmts.length - included_stmts;
     }
-    //mod.statements = mod.statementFilter.getLines ? mod.statementFilter.getLines() : 'ALL';
+    strip.excluded = stmts.length - strip.included;
   }
 
   return {
@@ -669,6 +739,7 @@ var sanitizeOpts = function(opts) {
   rv.sources = opts.sources;
   rv.output = opts.output;
   rv.dump = opts.dump;
+  rv.strip = opts.strip;
   rv.strict  = !opts.skipFailed;  // srtict should be true by default
 
   // convert resources & hubs to array pairs with expanded paths:
@@ -692,6 +763,8 @@ exports.create = function(opts) {
 
   if (opts.dump)
     return deps;
+
+  logging.debug("found dependencies:\n" + JSON.stringify(deps, null, "  "));
 
   var contents = generateBundle(deps, opts);
 
@@ -766,6 +839,11 @@ if (require.main === module) {
         name: 'compile',
         type: 'bool',
         help: "Precompile to JS (larger filesize, quicker execution)",
+      },
+      {
+        name: 'strip',
+        type: 'bool',
+        help: "Strip dead code (experimental)",
       },
       {
         name: 'dump',

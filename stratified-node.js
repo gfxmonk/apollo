@@ -2963,9 +2963,12 @@ pctx.stmt_scopes=[];
 
 pctx.js_ctx=0;
 
+pctx.stmt_index=0;
+
 push_decl_scope(pctx);
 push_stmt_scope(pctx);
 }
+
 
 
 
@@ -5669,7 +5672,7 @@ scan(pctx);
 while(pctx.token.id!="<eof>"){
 var stmt=parseStmt(pctx);
 
-add_stmt(stmt,pctx);;
+if(!pctx.statementFilter||pctx.statementFilter(pctx.stmt_index++ ))add_stmt(stmt,pctx);;
 }
 return end_script(pctx);
 }

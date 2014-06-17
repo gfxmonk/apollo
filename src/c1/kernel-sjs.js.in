@@ -174,12 +174,17 @@ function begin_script(pctx) {
   pctx.stmt_scopes = [];
   // js_ctx > 0 makes it a noblocking js context (i.e. __js {...}):
   pctx.js_ctx = 0;
+  // toplevel stmt_index is used for dead code removal (sjs:bundle)
+  pctx.stmt_index = 0;
 
   push_decl_scope(pctx);
   push_stmt_scope(pctx);
 }
 
-#define ADD_SCRIPT_STMT(stmt, pctx) add_stmt(stmt, pctx);
+#define ADD_SCRIPT_STMT(stmt, pctx)                                     \
+  if (!pctx.statementFilter || pctx.statementFilter(pctx.stmt_index++)) \
+    add_stmt(stmt, pctx);
+
 
 // add statement to the top decl & stmt scope:
 function add_stmt(stmt, pctx) {
