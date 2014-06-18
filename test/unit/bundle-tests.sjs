@@ -164,7 +164,8 @@ context {||
       var basename = url -> url.replace(/^.*\//, '').replace(/\.sjs$/, '')
 
       s.getDeps = function dependUpon(propertyNames, modsrc) {
-        @fs.writeFile(@path.join(s.tmp, 'dependency.sjs'), '// intentionally blank');
+        @fs.writeFile(@path.join(s.tmp, 'dep_a.sjs'), '// intentionally blank');
+        @fs.writeFile(@path.join(s.tmp, 'dep_b.sjs'), '// intentionally blank');
         @fs.writeFile(@path.join(s.tmp, 'lib.sjs'), modsrc);
         var mainPath = @path.join(s.tmp, 'main.sjs');
         @fs.writeFile(mainPath, "
@@ -232,12 +233,84 @@ context {||
       ');
 
       var exports = s.getExports(deps);
-      @info("EXPORTS", exports);
 
       deps.lib.exports .. @sort .. @assert.eq(['fun2']);
       exports .. @ownKeys .. @assert.contains('fun1');
       exports .. @ownKeys .. @assert.notContains('fun3');
       exports.fun2() .. @assert.eq('fun1+2 result');
+    }
+
+    test("selective dependency on secondary module") {|s|
+      var modsrc = '
+        var dep_a = require("./dep_a");
+        var dep_b = require("./dep_b");
+      
+        function get_b_a() { return dep_b.a; }
+
+        exports.needs_a_a = function() {
+          return dep_a.a();
+        };
+
+        exports.needs_a_all = function() {
+          return dep_a;
+        }
+
+        exports.needs_b_a = function() {
+          return get_b_a();
+        }
+      ';
+
+      var deps = s.getDeps(['needs_a_a'], modsrc);
+      deps .. @ownKeys .. @assert.notContains('dep_b');
+      deps.dep_a.exports .. @sort .. @assert.eq(['a']);
+
+      deps = s.getDeps(['needs_a_all'], modsrc);
+      deps .. @ownKeys .. @assert.notContains('dep_b');
+      deps.dep_a.exports .. @assert.contains(null);
+
+      deps = s.getDeps(['needs_b_a'], modsrc);
+      deps .. @ownKeys .. @assert.notContains('dep_a');
+      deps.dep_b.exports .. @assert.eq(['a']);
+    }
+
+    test("single module assigned to @altns") {|s|
+      var deps = s.getDeps(['fun'], '
+        @ = require("./dep_a");
+        @foo();
+        exports.fun = function() {
+          @bar();
+        }
+      ');
+      deps.dep_a.exports .. @sort .. @assert.eq(['bar','foo']);
+    }
+
+    test("multiple modules assigned to @altns") {|s|
+      var deps = s.getDeps(['fun'], '
+        @ = require(["./dep_a", "./dep_b"]);
+        @foo();
+        exports.fun = function() {
+          @bar();
+        }
+      ');
+      // we assume `foo` and `bar` come from either a or b
+      // (dead code will ignore properties for which no actual code is found)
+      deps.dep_a.exports .. @sort .. @assert.eq(['bar','foo']);
+      deps.dep_b.exports .. @sort .. @assert.eq(['bar','foo']);
+    }
+
+    test("multiple complex require() arguments") {|s|
+      var deps = s.getDeps(['main'], '
+        @ = require([{id: "./dep_a", name: "module_a"}, "./dep_b"]);
+        @module_a.foo();
+        @bar();
+      ');
+
+      // @module_a.foo can be statically determined to be equivalent to
+      // require("./module_a").foo
+      //
+      // Likewise, we know that @bar cannot come from dep_a
+      deps.dep_a.exports .. @sort .. @assert.eq(['foo']);
+      deps.dep_b.exports .. @sort .. @assert.eq(['bar']);
     }
 
     test("TODOs") {||
@@ -250,12 +323,6 @@ context {||
       //  - test that dependencies are piped through `std` modules
       //    e.g a dependency on <sjs:std>.prop gets mapped through to
       //      <any-dep-of-std>.prop
-      //
-      //  - need to deal with special cases like:
-      //    require([{
-      //      id:foo,
-      //      name: foo
-      //    }]);
       //
     }
   }

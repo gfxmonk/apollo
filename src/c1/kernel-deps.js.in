@@ -61,18 +61,9 @@ Scope.prototype.add_ident = function(ident) {
 };
 
 Scope.prototype.end = function() {
-  var seen_references = this.pctx.current_stmt.seen_references;
   for (var i=0; i<this.identifiers.length; i++) {
     var ident = this.identifiers[i];
-    var seen = false;
-    for (var ir = 0; ir<seen_references.length; ir++) {
-      if(seen_references[ir].dest === ident) {
-        seen = true;
-        break;
-      }
-    }
-
-    if (!seen) {
+    if (!ident.used) {
       console.log("turning otherwise-unused Id into variable reference: " + ident);
       this.get_var(ident.name);
     }
@@ -140,13 +131,13 @@ ExportScope.prototype.toString = function() {
   return "ExportScope(" + this.name + ", " + str(this.dependencies) + ")";
 }
 
-function ModuleReference(module, property) {
-  this.module = module;
-  assert(property === null || typeof(property) === 'string', "Non-string module export reference:" + str(property));
-  this.property = property;
+function ModuleReference(args, path) {
+  this.args = args;
+  assert(Array.isArray(path), "empty path given to ModuleReference");
+  this.path = path;
 };
 ModuleReference.prototype.toString = function() {
-  return "ModuleReference(" + str(this.module) + ", " + this.property + ")";
+  return "ModuleReference(" + str(this.args) + ", " + str(this.path) + ")";
 };
 
 function tapLog(desc, val) {
@@ -323,7 +314,7 @@ var Id = function(text, scope) {
   console.log("INIT ID: " + text);
   this.name = text;
   this.scope = scope;
-  this.referenced = false;
+  this.used = false;
 };
 Id.prototype = Object.create(Dynamic);
 Id.prototype.toString = function() { return "Id(" + this.name + ")"; };
@@ -331,6 +322,7 @@ Id.prototype.toString = function() { return "Id(" + this.name + ")"; };
 // delegate `dot`, `assign`, etc to underlying variable
 ;['dot','assign', 'call'].forEach(function(method) {
   Id.prototype[method] = function() {
+    this.used = true;
     var variable = this.scope.get_var(this.name);
     return variable[method].apply(variable, arguments);
   };
@@ -412,8 +404,6 @@ var Statement = function() {
   this.dependencies = [];
   this.moduleDependencies = [];
   this.stmt = null;
-  // tracks all seen references, even if they later get unref'd
-  this.seen_references = [];
 }
 Statement.prototype = Object.create(Dynamic);
 Statement.prototype.toString = function() {
@@ -422,7 +412,6 @@ Statement.prototype.toString = function() {
 Statement.prototype.add_reference = function(ref) {
   console.log("+REF: " + ref);
   this.references.push(ref);
-  this.seen_references.push(ref);
 };
 Statement.prototype.remove_reference = function(ref) {
   console.log("+UNREF: " + ref);
@@ -462,35 +451,35 @@ Statement.prototype.calculateDirectDependencies = function(toplevel) {
     }
   }
 
-  function determineModuleReferences(node, scope) {
+  function determineModuleReferences(node, path) {
     var module = null;
-    scope = scope || null;
+    path = path ? path.slice() : [];
 
-    console.log("Checking reference " + node);
+    console.log("Checking reference " + node +", path = " + str(path));
     while(true) {
       if (node instanceof Property) {
         // keep traversing parent
-        scope = node.name;
+        path.unshift(node.name);
         node = node.parent;
       } else if (node instanceof Call) {
         console.log("Checking call of: " + node.expr);
         if (node.expr === toplevel.require) {
           return node.staticArgs().map(function(args) {
-            console.log("yup! require call");
-            return [new ModuleReference(args, scope)];
+            console.log("yup! require call with path" + str(path));
+            return [new ModuleReference(args, path)];
           }).getLazy(function() {
             console.log("require call with dynamic args");
             return [];
           });
         } else {
           // not a require call - but maybe a property of some required module:
-          scope = null;
+          path = [];
           node = node.expr;
         }
       } else if (node instanceof Variable) {
         var rv = [];
         for (var valIdx = 0; valIdx < node.values.length; valIdx++) {
-          rv = rv.concat(determineModuleReferences(node.values[valIdx], scope));
+          rv = rv.concat(determineModuleReferences(node.values[valIdx], path));
         }
         return rv;
       } else {
@@ -740,11 +729,16 @@ ObjectLit.prototype = Object.create(Dynamic);
 ObjectLit.prototype.staticValue = function() {
   var props = this.props;
   var obj = {};
-  //XXX
   for (var i=0; i<props.length; i++) {
     var elem = props[i];
+    var key = elem[0];
+    if (key instanceof Id) {
+      key = key.name;
+    } else {
+      continue;
+    }
     elem[1].staticValue().map(function(v) {
-      obj[elem[0]] = v;
+      obj[key] = v;
     });
   }
   return Just(obj);

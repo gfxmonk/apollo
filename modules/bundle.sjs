@@ -360,19 +360,51 @@ function findDependencies(sources, settings) {
     }
 
     statement.moduleDependencies .. seq.each {|moduleDep|
-      console.log("Adding moduleDependency: ", moduleDep);
-      if (moduleDep.module === undefined) continue;
-      var deps = [moduleDep.module];
-      if (Array.isArray(moduleDep.module)) {
-        deps = moduleDep.module;
+      logging.verbose("Adding moduleDependency: ", moduleDep);
+      if (moduleDep.args === undefined) continue;
+      var args = moduleDep.args;
+      if (!Array.isArray(args)) {
+        args = [args];
       }
-      deps .. seq.each {|moduleRef|
-        var id = moduleRef;
-        if (typeof(id) !== 'string') {
-          id = moduleRef.id;
-          if (!id) throw new Error("require() argument without \"id\":" + JSON.stringify(moduleRef));
+
+      var actions = [];
+
+      args .. seq.each {|args|
+        if (!Array.isArray(args)) {
+          args = [args];
         }
-        addModule(loadModule(id, module), moduleDep.property, module);
+
+        var delayedActions = [];
+        args .. seq.each {|arg|
+          var id = arg;
+          var name = null;
+          var prop = moduleDep.path[0] || null;
+
+          if (typeof(id) !== 'string') {
+            id = arg.id;
+            if (!id) throw new Error("require() argument without \`id\`: " + JSON.stringify(arg));
+            name = arg.name || null;
+            if (name) {
+              if (prop !== name) {
+                // we're not accessing something under this module
+                continue;
+              }
+
+              // `require({id:mod, name:prop}).prop.foo`
+              // is a reference to mod.foo, not mod.prop.
+              prop = moduleDep.path[1] || null;
+
+              // we also know for sure that no other argument
+              // could be the provider of this dependency
+              delayedActions = [];
+              addModule(loadModule(id, module), prop, module);
+              break;
+            }
+          }
+
+          delayedActions.push(-> addModule(loadModule(id, module), prop, module));
+        }
+        delayedActions .. seq.each(a -> a());
       }
     }
   }
