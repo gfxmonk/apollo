@@ -247,7 +247,7 @@ function findDependencies(sources, settings) {
     metadata.toplevel.stmts .. seq.indexed .. seq.each {|[idx, stmt]|
       console.log(" --- Stmt: " + stmt);
       stmt.calculateDependencies(metadata.toplevel);
-      console.log(" - scope: " + stmt.exportScope);
+      console.log(" - scope: " + (stmt.exportScope || 'null'));
       ;(stmt.stmt.provides || []) .. seq.each {|ref|
         console.log(" - provides:" + ref);
         ;(ref.values || []) .. seq.each {|ref|
@@ -361,7 +361,14 @@ function findDependencies(sources, settings) {
 
     statement.moduleDependencies .. seq.each {|moduleDep|
       logging.verbose("Adding moduleDependency: ", moduleDep);
-      if (moduleDep.args === undefined) continue;
+      if (moduleDep.is_self) {
+        // if a statement references the module itself
+        // (via `module` / `exports`, we have to include the
+        // entire module
+        addModule(module, null, module);
+        return;
+      }
+
       var args = moduleDep.args;
       if (!Array.isArray(args)) {
         args = [args];

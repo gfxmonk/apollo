@@ -298,6 +298,15 @@ context {||
       deps.dep_b.exports .. @sort .. @assert.eq(['bar','foo']);
     }
 
+    test("multiple assignment") {|s|
+      var exports = s.getDeps(['fun1'], '
+        var _x = exports.fun1 = function() {
+          return "fun1";
+        }
+      ') .. s.getExports;
+      exports.fun1() .. @assert.eq("fun1");
+    };
+
     test("multiple complex require() arguments") {|s|
       var deps = s.getDeps(['main'], '
         @ = require([{id: "./dep_a", name: "module_a"}, "./dep_b"]);
@@ -313,6 +322,55 @@ context {||
       deps.dep_b.exports .. @sort .. @assert.eq(['bar']);
     }
 
+    test("assignments to global references") {|s|
+      var exports = s.getDeps(['main'], '
+        process.test_process_property = "assigned from bundle";
+      ') .. s.getExports();
+      process.test_process_property .. @assert.eq("assigned from bundle");
+    }.ignoreLeaks("test_process_property");
+
+    test("referencing `exports` directly") {|s|
+      var moduleSrc = '
+        function get_it(obj) {
+          return obj.prop;
+        };
+
+        exports.run = function() {
+          return get_it(exports);
+        };
+
+        exports.run_specific = function() {
+          return exports.prop;
+        };
+
+        exports.prop = "export prop!";
+        exports.unused = "unused";
+      ';
+
+      var deps = s.getDeps(['run'], moduleSrc);
+      var exports = s.getExports(deps);
+      exports.run() .. @assert.eq("export prop!");
+      exports .. @ownKeys .. @sort .. @assert.contains('unused');
+      
+
+      var deps = s.getDeps(['run_specific'], moduleSrc);
+      var exports = s.getExports(deps);
+      exports.run_specific() .. @assert.eq("export prop!");
+      exports .. @ownKeys .. @sort .. @assert.notContains('unused');
+    }
+
+    test("assigning to module.exports directly") {|s|
+      var exports = s.getDeps(['run'], '
+        var x = module.exports = function() {
+          return "module function!";
+        }
+        x.prop = "property!";
+      ') .. s.getExports();
+      exports() .. @assert.eq("module function!");
+      exports.prop .. @assert.eq("property!");
+    }
+
+
     test("TODOs") {||
       assert.fail("IMPLEMENT ME!");
       // To test:
@@ -324,6 +382,8 @@ context {||
       //    e.g a dependency on <sjs:std>.prop gets mapped through to
       //      <any-dep-of-std>.prop
       //
+      //  - special case tests against `hostenv` to explicitly include
+      //    xbrowser-block statements as toplevel blocks?
     }
   }
 

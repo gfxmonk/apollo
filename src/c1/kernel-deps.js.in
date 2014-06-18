@@ -40,7 +40,9 @@ var str = function(obj) {
 };
 var assert = function(cond, desc) { if (!cond) throw new Error(desc || "Assertion failed"); return cond };
 
+var _scope_ctr = 1;
 function Scope(parent, pctx) {
+  this._id = _scope_ctr++;
   this._parent = parent;
   this.variables = {};
   this.stmts = [];
@@ -51,7 +53,7 @@ function Scope(parent, pctx) {
   if (parent) parent.children.push(this);
 };
 Scope.prototype.toString = function() {
-  return "Scope(" + str(this.variables) + ")";
+  return "Scope#" + this._id + "(" + str(this.variables) + ")";
 }
 Scope.prototype.add_ident = function(ident) {
   // when we generate an identifier, we don't know how it'll be used.
@@ -118,26 +120,19 @@ Scope.prototype.get_var = function(v) {
   return new Ref(this.add_var(v), this.pctx);
 };
 
-// represents a tree-shake unit - anything behind an ExportScope
-// can be removed from the module output if not referenced by any used scope
-function ExportScope(name) {
-  this.name = name;
-  this.references = []; // a list of `Variable` objects
-};
-ExportScope.prototype.clone = function() {
-  return new ExportScope(this.name);
-};
-ExportScope.prototype.toString = function() {
-  return "ExportScope(" + this.name + ", " + str(this.dependencies) + ")";
-}
-
 function ModuleReference(args, path) {
-  this.args = args;
+  this.args = assert(args, "null arguments given to ModuleReference");
   assert(Array.isArray(path), "empty path given to ModuleReference");
   this.path = path;
 };
 ModuleReference.prototype.toString = function() {
   return "ModuleReference(" + str(this.args) + ", " + str(this.path) + ")";
+};
+
+function SelfReference() { };
+SelfReference.prototype.is_self = true;
+SelfReference.prototype.toString = function() {
+  return "SelfReference()";
 };
 
 function tapLog(desc, val) {
@@ -360,7 +355,7 @@ Variable.prototype.assign = Property.prototype.assign = function(value) {
   this.values.push(value);
 };
 
-Variable.prototype.toString = function() { return "Variable(" + this.name + ")"; };
+Variable.prototype.toString = function() { return "Variable[#" + this.scope._id + "](" + this.name + ")"; };
 
 var Ref = function(dest, pctx) {
   assert(dest, "Ref created with empty destination!");
@@ -457,6 +452,11 @@ Statement.prototype.calculateDirectDependencies = function(toplevel) {
 
     console.log("Checking reference " + node +", path = " + str(path));
     while(true) {
+      if (toplevel.is_exports(node) && path.length == 0) {
+        console.log("raw EXPORTS reference!");
+        return [new SelfReference()];
+      }
+
       if (node instanceof Property) {
         // keep traversing parent
         path.unshift(node.name);
@@ -495,30 +495,6 @@ Statement.prototype.calculateDirectDependencies = function(toplevel) {
     var node = this.references[i].dest;
     this.moduleDependencies = this.moduleDependencies.concat(determineModuleReferences(node));
   }
-};
-
-Statement.prototype.expandDependencies = function() {
-  var self = this;
-  var seen = [];
-  var traverse = function(stmt) {
-    if (!(stmt instanceof Statement)) {
-      console.log("ignoring non-stmt: " + str(stmt));
-      return;
-    }
-    // TODO: add moduleDependencies
-    for (var i=0; i<stmt.dependencies.length; i++) {
-      var dep = stmt.dependencies[i];
-      if (dep === self) return;
-      if (seen.indexOf(dep) !== -1) return;
-      seen.push(dep);
-      if (self.dependencies.indexOf(dep) === -1) {
-        // console.log("TRANSITIVE: " + self + " depends on " + dep);
-        self.dependencies.push(dep);
-      }
-      traverse(dep);
-    }
-  }
-  traverse(self);
 };
 
 var MultipleStatements = function(stmts) {
@@ -576,6 +552,12 @@ function expand_assignment(l, op, r, pctx, stmts) {
       r = r.dest;
     }
 
+    if (r instanceof Assignment) {
+      // `x = y = z` should expand to:
+      // `y = z`; `x = y`;
+      stmts.push(r);
+    }
+
     if (l instanceof Id) {
       l = current_scope(pctx).add_var(l.name);
     }
@@ -588,7 +570,7 @@ function expand_assignment(l, op, r, pctx, stmts) {
         var _l = par[1];
         var _r = par[0];
         assert(_r instanceof Id, "Unexpected RHS in destructure pattern: " + _r);
-        _r = new Property(r, _r.name);
+        _r = r.dot(_r.name);
         console.log("Assigning " + _l + " -> " + _r);
         provide(_l, _r);
       }
@@ -748,17 +730,27 @@ ObjectLit.prototype.toString = function() { return "ObjectLit(" + str(this.props
 
 function init_toplevel(pctx) {
   var GlobalScope = new Scope(null, pctx);
-  var Toplevel = new Scope(GlobalScope, pctx);
+  var PredefinedModuleScope = new Scope(GlobalScope, pctx);
+  var ModuleScope = new Scope(PredefinedModuleScope, pctx);
 
   function constant(name) {
-    var v = Toplevel.add_var(name);
+    var v = PredefinedModuleScope.add_var(name);
     return v;
   };
-  Toplevel.top = Toplevel;
-  Toplevel.require = constant('require');
-  Toplevel.exports = constant('exports');
-  Toplevel.module = constant('module');
-  pctx.scopes = [Toplevel];
+  ModuleScope.top = ModuleScope;
+  ModuleScope.require = constant('require');
+  ModuleScope.module = constant('module');
+
+  var export_expressions = [constant('exports'), ModuleScope.module.dot('exports')];
+
+  // __oni_altns should be considered part of module scope, unlike
+  // exports / module / require which sit above it
+  ModuleScope.add_var('__oni_altns');
+
+  ModuleScope.is_exports = function(expr) {
+    return export_expressions.indexOf(expr) !== -1;
+  };
+  pctx.scopes = [ModuleScope];
   pctx.current_stmt = new Statement();
   pctx.stmt_index = 0;
 };
@@ -830,10 +822,9 @@ function add_stmt(stmt, pctx) {
             }
           }
 
-          if (root === scope.exports) {
-            console.log("SCOPE: " + prop);
+          if (scope.is_exports(root)) {
             applyScope(container, 'exports.' + (prop || null));
-          } else if (root instanceof Variable) {
+          } else if (root instanceof Variable && root.scope === scope) {
             applyScope(container, assert(root.name));
           } else {
             applyScope(container, null);
