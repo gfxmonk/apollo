@@ -46,12 +46,40 @@ function Scope(parent, pctx) {
   this.stmts = [];
   this.children = [];
   this.pctx = pctx;
+  this.identifiers = [];
   this._this_var = new Variable('this', this);
   if (parent) parent.children.push(this);
 };
 Scope.prototype.toString = function() {
   return "Scope(" + str(this.variables) + ")";
 }
+Scope.prototype.add_ident = function(ident) {
+  // when we generate an identifier, we don't know how it'll be used.
+  // We store it on the current `scope`, and when each scope is
+  // complete we turn unused identifiers into variable references
+  this.identifiers.push(ident);
+};
+
+Scope.prototype.end = function() {
+  var seen_references = this.pctx.current_stmt.seen_references;
+  for (var i=0; i<this.identifiers.length; i++) {
+    var ident = this.identifiers[i];
+    var seen = false;
+    for (var ir = 0; ir<seen_references.length; ir++) {
+      if(seen_references[ir].dest === ident) {
+        seen = true;
+        break;
+      }
+    }
+
+    if (!seen) {
+      console.log("turning otherwise-unused Id into variable reference: " + ident);
+      this.get_var(ident.name);
+    }
+  }
+  delete this.identifiers;
+};
+
 Scope.prototype.add_var = function(name) {
   if (name instanceof ObjectLit) {
     // destructuring object
@@ -292,8 +320,10 @@ Property.prototype.toString = function() {
 
 // Identifier
 var Id = function(text, scope) {
+  console.log("INIT ID: " + text);
   this.name = text;
   this.scope = scope;
+  this.referenced = false;
 };
 Id.prototype = Object.create(Dynamic);
 Id.prototype.toString = function() { return "Id(" + this.name + ")"; };
@@ -382,15 +412,20 @@ var Statement = function() {
   this.dependencies = [];
   this.moduleDependencies = [];
   this.stmt = null;
+  // tracks all seen references, even if they later get unref'd
+  this.seen_references = [];
 }
 Statement.prototype = Object.create(Dynamic);
 Statement.prototype.toString = function() {
   return 'Stmt{'+this.stmt.toString() +'}';
 };
 Statement.prototype.add_reference = function(ref) {
+  console.log("+REF: " + ref);
   this.references.push(ref);
+  this.seen_references.push(ref);
 };
 Statement.prototype.remove_reference = function(ref) {
+  console.log("+UNREF: " + ref);
   var idx = this.references.indexOf(ref);
   if (idx === -1)
     throw new Error("Can't find reference: " + ref + " in list: " + str(this.references));
@@ -754,6 +789,7 @@ function push_scope(pctx) {
 
 function pop_scope(pctx) {
   var scope = pctx.scopes.pop();
+  scope.end();
   console.log("-- SCOPE");
   return scope;
 }
@@ -981,7 +1017,10 @@ function gen_crf(crf) {
 #endif /* QUASIS */
 
 
-#define GEN_IDENTIFIER(value, pctx) return new Id(value, current_scope(pctx));
+#define GEN_IDENTIFIER(value, pctx)               \
+  var ident = new Id(value, current_scope(pctx)); \
+  current_scope(pctx).add_ident(ident);           \
+  return ident;
 
 #define GEN_OBJ_LIT(props, pctx)                          \
   return new ObjectLit(props, pctx);

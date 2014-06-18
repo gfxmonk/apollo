@@ -274,8 +274,6 @@ function findDependencies(sources, settings) {
     }
 
     if(docs.require) {
-      logging.warn("TODO: infer some sort of requirements from docs");
-
       function addRequireAnnotations(exportScope, annotations) {
         if (!annotations) return;
         annotations .. seq.each {|req|
@@ -335,7 +333,7 @@ function findDependencies(sources, settings) {
 
     if (property) {
       module.stmts .. seq.each {|stmt|
-        if (stmt.exportScope .. seq.hasElem(null) || stmt.exportScope .. seq.hasElem(property)) {
+        if (stmt.exportScope .. seq.hasElem(null) || stmt.exportScope .. seq.hasElem("exports.#{property}")) {
           addStatement(module, stmt);
         }
       }
@@ -471,7 +469,7 @@ function generateBundle(deps, settings) {
       }"
     }
   } else {
-    var stringifier = require('./compile/minify');
+    var stringifier = require('./compile/stringify');
     compile = (src, statementFilter) -> stringifier.compile(src, {
       keeplines: true,
       statementFilter: statementFilter,
@@ -693,7 +691,7 @@ var toPairs = function(obj, splitter, name) {
 var InternalOptions = function() { };
 var sanitizeOpts = function(opts) {
   // sanitizes / canonicalizes opts.
-  // Used by very function in this module so that they can
+  // Used by every function in this module so that they can
   // assume sane opts.
   opts = opts || {};
   if (opts instanceof(InternalOptions)) return opts;

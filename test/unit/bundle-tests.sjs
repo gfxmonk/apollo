@@ -1,4 +1,6 @@
-var {test, context, assert} = require('sjs:test/suite');
+var {test, context, assert} = @ = require('sjs:test/std');
+var { @TemporaryDir } = require('sjs:nodejs/tempfile');
+var { @rimraf } = require('sjs:nodejs/rimraf');
 
 context {||
 
@@ -21,6 +23,19 @@ context {||
     }
   }
 
+  var evaluateBundle = function(contents) {
+    // set up some "globals"
+    var __oni_rt_bundle = {};
+    var document = {
+      location: {
+        origin: 'HOST'
+      }
+    };
+
+    eval(contents);
+    return __oni_rt_bundle;
+  };
+
   var createBundle = function(settings) {
     settings = {"output":tmpfile} .. object.merge(settings);
     var output = settings.output;
@@ -35,16 +50,7 @@ context {||
       contents = contents .. seq.join('\n');
     }
 
-    // set up some "globals"
-    var __oni_rt_bundle = {};
-    var document = {
-      location: {
-        origin: 'HOST'
-      }
-    };
-
-    eval(contents);
-    return __oni_rt_bundle;
+    return evaluateBundle(contents);
   }
 
   var bundledModuleNames = function(bundle) {
@@ -147,23 +153,111 @@ context {||
     }
   }
 
-  test("TODOs") {||
-    assert.fail("IMPLEMENT ME!");
-    // To test:
-    //
-    //  - if a module references `exports` or `module.exports`, the entire
-    //    module should be exported
-    //
-    //  - test that dependencies are piped through `std` modules
-    //    e.g a dependency on <sjs:std>.prop gets mapped through to
-    //      <any-dep-of-std>.prop
-    //
-    //  - need to deal with special cases like:
-    //    require([{
-    //      id:foo,
-    //      name: foo
-    //    }]);
-    //
+  context("dead code removal") {||
+    test.beforeEach {|s|
+      s.tmp = @TemporaryDir({prefix:'bundle-test'});
+      s.bundleSettings = {
+        strip: true,
+        resources: [[s.tmp, '']],
+      };
+
+      var basename = url -> url.replace(/^.*\//, '').replace(/\.sjs$/, '')
+
+      s.getDeps = function dependUpon(propertyNames, modsrc) {
+        @fs.writeFile(@path.join(s.tmp, 'dependency.sjs'), '// intentionally blank');
+        @fs.writeFile(@path.join(s.tmp, 'lib.sjs'), modsrc);
+        var mainPath = @path.join(s.tmp, 'main.sjs');
+        @fs.writeFile(mainPath, "
+        var mod = require('./lib');
+        #{propertyNames .. @map(p -> "console.log(mod.#{p});\n")}
+        ");
+        var deps = bundle.findDependencies( [mainPath], s.bundleSettings);
+        var rv = {
+          all: deps,
+        };
+        deps.modules .. @ownPropertyPairs .. @each {|[k,v]|
+          rv[basename(k)] = v;
+        }
+        @info("deps: ", rv);
+        return rv;
+      };
+
+      s.getExports = function(deps) {
+        var contents = bundle.generateBundle(deps.all, s.bundleSettings) .. @join('\n');
+        var libBundle = evaluateBundle(contents).m
+          .. @ownPropertyPairs
+          .. @map(([k,v]) -> [basename(k),v])
+          .. @pairsToObject()
+          .. @get('lib');
+
+        var args = {
+          exports: {},
+          require: -> null,
+          __onimodulename: 'lib.sjs',
+          __oni_altns: {},
+        };
+        args.module = {exports: args.exports};
+          
+        var argNames = require.extensions['sjs'].module_args;
+        var flatArgs = argNames .. @map(k -> args .. @get(k));
+
+        @info("evaluating", libBundle);
+        new Function(argNames .. @join(','), libBundle).apply(null, flatArgs);
+        @info("got exports:", args.module.exports);
+        return args.module.exports;
+      };
+ 
+    }
+    test.afterEach {|s|
+      @rimraf(s.tmp);
+    }
+
+
+    test("basic dependency") {|s|
+      var deps = s.getDeps(['fun2'], '
+        var needed_by_fun1 = "fun1+2 result";
+        var needed_by_fun3 = "fun3 result";
+
+        exports.fun1 = function() {
+          return needed_by_fun1;
+        };
+
+        exports.fun2 = function() {
+          return exports.fun1();
+        };
+
+        exports.fun3 = function() {
+          return needed_by_fun3;
+        };
+      ');
+
+      var exports = s.getExports(deps);
+      @info("EXPORTS", exports);
+
+      deps.lib.exports .. @sort .. @assert.eq(['fun2']);
+      exports .. @ownKeys .. @assert.contains('fun1');
+      exports .. @ownKeys .. @assert.notContains('fun3');
+      exports.fun2() .. @assert.eq('fun1+2 result');
+    }
+
+    test("TODOs") {||
+      assert.fail("IMPLEMENT ME!");
+      // To test:
+      //
+      //  - if a module references `exports` or `module.exports`, the entire
+      //    module should be exported
+      //
+      //  - test that dependencies are piped through `std` modules
+      //    e.g a dependency on <sjs:std>.prop gets mapped through to
+      //      <any-dep-of-std>.prop
+      //
+      //  - need to deal with special cases like:
+      //    require([{
+      //      id:foo,
+      //      name: foo
+      //    }]);
+      //
+    }
   }
 
 }.serverOnly();

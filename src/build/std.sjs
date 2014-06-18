@@ -42,6 +42,8 @@ var modules = [
 if (hostenv === 'nodejs') {
   modules = modules.concat([
     'sjs:nodejs/stream',
+    'sjs:nodejs/tempfile',
+    'sjs:nodejs/rimraf',
     {id:'sjs:sys', include: ['argv', 'eval']},
     {id:'nodejs:path', name: 'path'},
     {id:'sjs:nodejs/fs', name: 'fs'},
