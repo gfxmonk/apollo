@@ -22,6 +22,11 @@
   @require sjs:sys
   @require sjs:url
   @require sjs:observable
+
+  @reexports-dependencies *
+  @exports-dependency sjs:object object // exports includes object
+  @exports-dependency sjs:object // exports includes all object keys
+  @exports-dependency sjs:object // exports includes all object keys
 */
 
 var hostenv = require('builtin:apollo-sys').hostenv;

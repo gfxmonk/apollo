@@ -402,12 +402,14 @@ Scope.prototype.get_var = function(v) {
     return this._this_var;
   }
   if (Object.prototype.hasOwnProperty.call(this.variables, v)) {
+    console.log("ref() from get_var");
     return new Ref(this.variables[v], this.pctx);
   }
   if (this._parent) {
     return this._parent.get_var(v);
   }
   // console.warn("global variable reference: " + v); // XXX
+  console.log("ref() from falling back to a global var:");
   return new Ref(this.add_var(v), this.pctx);
 };
 
@@ -657,7 +659,7 @@ var Ref = function(dest, pctx) {
 Ref.prototype = Object.create(Dynamic);
 
 Ref.prototype.call = function(args) {
-  console.log("REF CALL");
+  console.log("REF from call: " + str(this.dest));
   var call = this.dest.call(args, this.pctx);
   return new Ref(call, this.pctx);
 };
@@ -675,6 +677,7 @@ Ref.prototype.dot = function(name) {
   // that the code _only_ accesses <foo>.prop, and not <foo> itself.
   var underlying = this.dest.dot(name);
   this.deref();
+  console.log("REF from dot: " + str(underlying));
   return new Ref(underlying, this.pctx);
 };
 
@@ -716,6 +719,52 @@ Statement.prototype.calculateDependencies = function(toplevel) {
   // this.expandDependencies();
 };
 
+function determineModuleReferences(node, path) {
+  var module = null;
+  path = path ? path.slice() : [];
+
+  console.log("Checking reference " + node +", path = " + str(path));
+  while(true) {
+    if (this.is_exports(node) && path.length == 0) {
+      console.log("raw EXPORTS reference!");
+      return [new SelfReference()];
+    }
+
+    if (node instanceof Property) {
+      // keep traversing parent
+      path.unshift(node.name);
+      node = node.parent;
+    } else if (node instanceof Call) {
+      console.log("Checking call of: " + node.expr);
+      if (node.expr === this.require) {
+        return node.staticArgs().map(function(args) {
+          var moduleRef = new ModuleReference(args, path);
+          console.log("yup! require call:" + moduleRef);
+          return [moduleRef];
+        }).getLazy(function() {
+          console.log("require call with dynamic args");
+          return [];
+        });
+      } else {
+        // not a require call - but maybe a property of some required module:
+        path = [];
+        node = node.expr;
+      }
+    } else if (node instanceof Variable) {
+      var rv = [];
+      for (var valIdx = 0; valIdx < node.values.length; valIdx++) {
+        console.log("traversing variable " + node + " value: " + node.values[valIdx]);
+        rv = rv.concat(determineModuleReferences.call(this, node.values[valIdx], path));
+      }
+      return rv;
+    } else {
+      console.log("unknown thing! " + node);
+      module = null;
+      return [];
+    }
+  }
+};
+
 Statement.prototype.calculateDirectDependencies = function(toplevel) {
   var stmts = toplevel.stmts;
   
@@ -725,58 +774,31 @@ Statement.prototype.calculateDirectDependencies = function(toplevel) {
     if(stmt === this) continue;
     var provides = stmt.stmt.provides;
     if (!provides) continue;
-    for (var r = 0; r<this.references.length; r++) {
-      var ref = this.references[r];
-      if (provides.indexOf(ref.dest) !== -1) {
-        // console.log("stmt " + this + " depends on " + stmt);
-        // reference to a toplevel variable
-        if (this.dependencies.indexOf(stmt) == -1) {
-          this.dependencies.push(stmt);
-        }
+
+    for (var p = 0; p<provides.length; p++) {
+      var provided = provides[p];
+      if (toplevel.is_exports(provided)) {
+        console.log("Stmt " + stmt + " provides module.exports - adding self-reference");
+        this.moduleDependencies.push(new SelfReference());
       }
     }
-  }
 
-  function determineModuleReferences(node, path) {
-    var module = null;
-    path = path ? path.slice() : [];
-
-    console.log("Checking reference " + node +", path = " + str(path));
-    while(true) {
-      if (toplevel.is_exports(node) && path.length == 0) {
-        console.log("raw EXPORTS reference!");
-        return [new SelfReference()];
-      }
-
-      if (node instanceof Property) {
-        // keep traversing parent
-        path.unshift(node.name);
-        node = node.parent;
-      } else if (node instanceof Call) {
-        console.log("Checking call of: " + node.expr);
-        if (node.expr === toplevel.require) {
-          return node.staticArgs().map(function(args) {
-            console.log("yup! require call with path" + str(path));
-            return [new ModuleReference(args, path)];
-          }).getLazy(function() {
-            console.log("require call with dynamic args");
-            return [];
-          });
+    for (var r = 0; r<this.references.length; r++) {
+      var needed = this.references[r].dest;
+      while(true) {
+        if (provides.indexOf(needed) !== -1) {
+          // console.log("stmt " + this + " depends on " + stmt);
+          if (this.dependencies.indexOf(stmt) == -1) {
+            this.dependencies.push(stmt);
+          }
+        }
+        if (needed instanceof Property) {
+          // if we depend on `foo.bar`, we also depend
+          // on any statement that provides `foo`
+          needed = needed.parent;
         } else {
-          // not a require call - but maybe a property of some required module:
-          path = [];
-          node = node.expr;
+          break;
         }
-      } else if (node instanceof Variable) {
-        var rv = [];
-        for (var valIdx = 0; valIdx < node.values.length; valIdx++) {
-          rv = rv.concat(determineModuleReferences(node.values[valIdx], path));
-        }
-        return rv;
-      } else {
-        console.log("unknown thing! " + node);
-        module = null;
-        return [];
       }
     }
   }
@@ -784,7 +806,9 @@ Statement.prototype.calculateDirectDependencies = function(toplevel) {
   // module dependencies:
   for (var i = 0; i < this.references.length; i++) {
     var node = this.references[i].dest;
-    this.moduleDependencies = this.moduleDependencies.concat(determineModuleReferences(node));
+    console.log("Adding references from " + this.references[i]);
+    this.moduleDependencies = this.moduleDependencies.concat(
+        toplevel.determineModuleReferences(node));
   }
 };
 
@@ -807,10 +831,16 @@ var Assignment = function(l, op, r, pctx) {
   this.op = op;
   this.right = r || Dynamic;
   var scope = current_scope(pctx);
-  var provides = this.provides = [];
+  var provides = [];
+  if (r instanceof Assignment) {
+    // `x = y = z` provides both x & y
+    provides = r.provides.slice();
+  }
+  provides.push(l);
+  this.provides = provides;
+
   var isAssignment = op === '=';
   if (isAssignment) l.assign(r);
-  provides.push(l);
 }
 Assignment.prototype = Object.create(Dynamic);
 Assignment.prototype.toString = function() {
@@ -829,6 +859,7 @@ function expand_assignment(l, op, r, pctx, stmts) {
   stmts = stmts || [];
 
   if(l instanceof Ref) {
+    l.deref();
     l = l.dest;
   }
   var scope = current_scope(pctx);
@@ -841,12 +872,6 @@ function expand_assignment(l, op, r, pctx, stmts) {
       // `l` gets referenced / dotted / called
       r.deref();
       r = r.dest;
-    }
-
-    if (r instanceof Assignment) {
-      // `x = y = z` should expand to:
-      // `y = z`; `x = y`;
-      stmts.push(r);
     }
 
     if (l instanceof Id) {
@@ -1041,6 +1066,7 @@ function init_toplevel(pctx) {
   ModuleScope.is_exports = function(expr) {
     return export_expressions.indexOf(expr) !== -1;
   };
+  ModuleScope.determineModuleReferences = determineModuleReferences;
   pctx.scopes = [ModuleScope];
   pctx.current_stmt = new Statement();
   pctx.stmt_index = 0;
@@ -1099,33 +1125,49 @@ function add_stmt(stmt, pctx) {
       container.set(stmt);
       pctx.current_stmt = new Statement();
 
-      if (stmt instanceof Assignment) {
-        console.log("Assignment to: " + str(stmt.provides));
-        for (var p = 0; p<stmt.provides.length; p++) {
-          var provided = stmt.provides[p];
-          var root = provided;
-          console.log("root : " + root);
-          if (root instanceof Property) {
+      function add_scope_from(stmt, do_default) {
+        if (stmt instanceof Assignment) {
+          console.log("Assignment to: " + str(stmt.provides));
+          for (var p = 0; p<stmt.provides.length; p++) {
+            var provided = stmt.provides[p];
+            var root = provided;
+            console.log("root : " + root);
             var prop = null;
-            while(root instanceof Property) {
-              prop = root.name;
-              root = root.parent;
+            if (root instanceof Property) {
+              while(root instanceof Property) {
+                if (scope.is_exports(root)) break; // don't progress up past exports
+                prop = root.name;
+                root = root.parent;
+              }
+            }
+            console.log("applying ALL scopes for " + root);
+
+            if (scope.is_exports(root)) {
+              applyScope(container, prop ? 'exports.' + prop : null);
+            } else {
+              add_scope_from(root);
             }
           }
-
-          if (scope.is_exports(root)) {
-            applyScope(container, 'exports.' + (prop || null));
-          } else if (root instanceof Variable && root.scope === scope) {
-            applyScope(container, assert(root.name));
+        } else if (stmt instanceof Variable) {
+          if (stmt.scope === scope) {
+            // toplevel var: apply this scope
+            applyScope(container, assert(stmt.name));
           } else {
-            applyScope(container, null);
           }
+
+          console.log("applying ALL scopes for " + stmt);
+          // also apply any scopes adopted by its values
+          for (var vali=0; vali<stmt.values.length; vali++) {
+            add_scope_from(stmt.values[vali]);
+          }
+        } else {
+          return false;
         }
-      } else if (stmt instanceof Variable) {
-        // toplevel var
-        applyScope(container, assert(stmt.name));
-      } else {
-        // non-assignments get toplevel scope
+        return true;
+      }
+      var added = add_scope_from(stmt, true);
+      if (!added) {
+        // default to toplevel scope
         console.log("Non-assignment: " + stmt);
         applyScope(container, null);
       }
@@ -1392,11 +1434,11 @@ Identifier.prototype.exsf = function(pctx) {
   if (this.alternate === true) {
     if (this.value.length) {
       
-      return current_scope(pctx).get_var("__oni_altns").dot(this.value);
+      console.log("@NS IDENT"); return current_scope(pctx).get_var("__oni_altns").dot(this.value);
     }
     else {
       
-      return current_scope(pctx).get_var("__oni_altns");
+      console.log("@NS plain"); return current_scope(pctx).get_var("__oni_altns");
     }
   }
   else {

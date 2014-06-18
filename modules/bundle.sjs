@@ -184,7 +184,7 @@ function findDependencies(sources, settings) {
   // map of module_id -> ([stmts] | null)
   var requirements = {};
 
-  function loadModule(requireName, parent) {
+  function loadModule(requireName, parent, prefix) {
     if (shouldExcude(requireName, excludes)) return;
 
     logging.verbose("Processing: " + requireName);
@@ -217,7 +217,6 @@ function findDependencies(sources, settings) {
     }
 
     if (shouldExcude(requireName, excludes)) return;
-    //if (parent && parent.deps) parent.deps.push(resolved.path);
 
     if (modules .. object.hasOwn(resolved.path)) {
       logging.debug("(already processed)");
@@ -245,25 +244,25 @@ function findDependencies(sources, settings) {
     module.statementFilter = new StatementFilter(module);
 
     metadata.toplevel.stmts .. seq.indexed .. seq.each {|[idx, stmt]|
-      console.log(" --- Stmt: " + stmt);
+      logging.debug(" --- Stmt: " + stmt);
       stmt.calculateDependencies(metadata.toplevel);
-      console.log(" - scope: " + (stmt.exportScope || 'null'));
+      logging.debug(" - scope: ", stmt.exportScope);
       ;(stmt.stmt.provides || []) .. seq.each {|ref|
-        console.log(" - provides:" + ref);
+        logging.debug(" - provides:" + ref);
         ;(ref.values || []) .. seq.each {|ref|
-          console.log("   - assumes value:" + ref);
+          logging.debug("   - assumes value:" + ref);
         }
       }
       stmt.dependencies .. seq.each {|ref|
-        console.log(" - needs:" + ref);
+        logging.debug(" - needs:" + ref);
       }
 
       stmt.moduleDependencies .. seq.each {|ref|
-        console.log(" - needsMod:" + ref);
+        logging.debug(" - needsMod:" + ref);
       }
 
       stmt.references .. seq.each {|ref|
-        console.log(" - references:" + ref);
+        logging.debug(" - references:" + ref);
       }
     }
 
@@ -273,23 +272,49 @@ function findDependencies(sources, settings) {
       return null;
     }
 
+    // TODO: is this flag really needed?
+    // This seems safe to apply in the general case
+    if (docs['reexports-dependencies']) {
+      module.transitive = [];
+      // hash of path -> property|null
+      metadata.toplevel.stmts .. seq.each {|stmt|
+        ;(stmt.stmt.provides || []) .. seq.each {|provides|
+          if (metadata.toplevel.is_exports(provides)) {
+            logging.debug(" - provides exports:" + provides);
+            provides.values .. seq.each {|val|
+              var deps = metadata.toplevel.determineModuleReferences(val);
+              module.transitive = module.transitive.concat(deps);
+            }
+          }
+        }
+      }
+      logging.warn("Transitively got refs: " + module.transitive);
+    }
+
     if(docs.require) {
       function addRequireAnnotations(exportScope, annotations) {
         if (!annotations) return;
         annotations .. seq.each {|req|
-          var [name, props] = req.split('#') .. seq.map(s -> s.trim());
-          if (props) props = deps.split(',') .. seq.map(s -> s.trim());
+          var [name, paths] = req.split('#') .. seq.map(s -> s.trim());
+
+          if (paths) paths = paths.split(',') .. seq.map(s -> s.trim());
+          else paths = [null];
+
           if (!module.requireAnnotations[exportScope]) {
             module.requireAnnotations[exportScope] = [];
           }
-          module.requireAnnotations[exportScope].push([name, props || null]);
-          loadModule(name, module);
+
+          paths .. seq.each {|path|
+            if (path !== null) {
+              path = path.split(".") .. seq.map(s -> s.trim());
+            }
+            module.requireAnnotations[exportScope].push([name, path]);
+          }
         }
       }
 
       addRequireAnnotations(null, docs.require);
       docs.children .. object.ownPropertyPairs .. seq.each {|name, childDocs|
-        console.warn("CHILD: #{name} -- ", docs);
         addRequireAnnotations(name, childDocs.require);
       }
     }
@@ -303,24 +328,29 @@ function findDependencies(sources, settings) {
   function addModuleAnnotations(mod, property) {
     mod.requireAnnotations .. object.ownPropertyPairs .. seq.each { |[exportScope, annotations]|
       if (exportScope === null || exportScope === property) {
-        annotations .. seq.each {| [ref, props]|
-          props .. seq.each { |prop|
-            addModule(mod, ref, prop);
-          }
+        annotations .. seq.each {| [name, path]|
+          var depMod = loadModule(name, mod);
+          addModule(depMod, path, mod);
         }
       }
     }
   }
 
-  function addModule(module, property, parent) {
+  function addModule(module, path, parent) {
     if (!module) return; // this will have already printed a warning
-    if (!settings.strip) property = null;
+    if (path == null) path = [];
+    if (!Array.isArray(path)) {
+      throw new Error("invalid `path`: " + JSON.stringify(path));
+    }
+    if (!settings.strip) path = [];
     if (parent) {
-      logging.verbose("Adding dependency on #{module.id}##{property} from #{parent.id}");
+      logging.verbose("Adding dependency on #{module.id}##{path} from #{parent.id}");
     } else {
       logging.debug("Processing module: #{module.id}");
-      property = null;
+      path = [];
     }
+
+    var property = path[0] || null;
 
     if (module.exports .. seq.hasElem(property)) {
       // already processed
@@ -334,9 +364,16 @@ function findDependencies(sources, settings) {
     if (property) {
       module.stmts .. seq.each {|stmt|
         if (stmt.exportScope .. seq.hasElem(null) || stmt.exportScope .. seq.hasElem("exports.#{property}")) {
+          logging.debug("adding statement with scopes: ", stmt.exportScope);
           addStatement(module, stmt);
         }
       }
+      if (module.transitive) {
+        module.transitive .. seq.each {|dep|
+          addModuleDependency(module, dep, path);
+        }
+      }
+
     } else {
       if (settings.strip && parent) {
         logging.warn(
@@ -348,11 +385,88 @@ function findDependencies(sources, settings) {
     }
   }
 
+  function canonicalizeRequireArguments(args) {
+    // turn require(a, opts) -> require(a)
+    if (Array.isArray(args)) {
+      args = args[0];
+    }
+
+    // turn require(a) -> require([a])
+    if (!Array.isArray(args)) {
+      args = [args];
+    }
+
+    return args .. seq.map(function(arg) {
+      var id = arg;
+      var name = null;
+
+      if (typeof(id) !== 'string') {
+        id = arg.id;
+        if (!id) throw new Error("require() argument without \`id\`: " + JSON.stringify(arg));
+        name = arg.name || null;
+      }
+
+      return {
+        id: id,
+        name: name,
+      };
+    });
+  }
+
+  function addModuleDependency(module, moduleDep, prefix) {
+    if (moduleDep.is_self) {
+      logging.verbose("module self reference");
+      // if a statement references the module itself
+      // (via `module` / `exports`, we have to include the
+      // entire module
+      addModule(module, null, module);
+      return;
+    }
+
+    var path = moduleDep.path;
+    if (prefix) {
+      // may be set if we're coming via a transitive depencency
+      path = prefix.concat(path);
+    }
+    logging.verbose("Adding moduleDependency: " + moduleDep + " (" + path + ")");
+
+    var args = moduleDep.args .. canonicalizeRequireArguments();
+    if (!Array.isArray(args)) {
+      args = [args];
+    }
+    logging.debug("canonicalized args: ", args);
+
+    var delayedActions = [];
+    args .. seq.each {|arg|
+      var {id, name} = arg;
+      var prop = path[0] || null;
+
+      if (name) {
+        if (prop !== name) {
+          // we're not accessing something under this module
+          continue;
+        }
+
+        // `require({id:mod, name:prop}).prop.foo`
+        // is a reference to mod.foo, not mod.prop.
+        // we also know for sure that no other argument
+        // could be the provider of this dependency
+        delayedActions = [];
+        addModule(loadModule(id, module, name), path.slice(1), module);
+        break;
+      }
+
+      delayedActions.push(-> addModule(loadModule(id, module, null), path, module));
+    }
+    delayedActions .. seq.each(a -> a());
+  };
+
   var seenStatements = [];
   function addStatement(module, statement) {
     if (seenStatements.indexOf(statement) !== -1) return;
     seenStatements.push(statement);
 
+    logging.debug("Adding statement: " + statement);
     module.statementFilter.add(statement);
 
     statement.dependencies .. seq.each {|dep|
@@ -360,59 +474,7 @@ function findDependencies(sources, settings) {
     }
 
     statement.moduleDependencies .. seq.each {|moduleDep|
-      logging.verbose("Adding moduleDependency: ", moduleDep);
-      if (moduleDep.is_self) {
-        // if a statement references the module itself
-        // (via `module` / `exports`, we have to include the
-        // entire module
-        addModule(module, null, module);
-        return;
-      }
-
-      var args = moduleDep.args;
-      if (!Array.isArray(args)) {
-        args = [args];
-      }
-
-      var actions = [];
-
-      args .. seq.each {|args|
-        if (!Array.isArray(args)) {
-          args = [args];
-        }
-
-        var delayedActions = [];
-        args .. seq.each {|arg|
-          var id = arg;
-          var name = null;
-          var prop = moduleDep.path[0] || null;
-
-          if (typeof(id) !== 'string') {
-            id = arg.id;
-            if (!id) throw new Error("require() argument without \`id\`: " + JSON.stringify(arg));
-            name = arg.name || null;
-            if (name) {
-              if (prop !== name) {
-                // we're not accessing something under this module
-                continue;
-              }
-
-              // `require({id:mod, name:prop}).prop.foo`
-              // is a reference to mod.foo, not mod.prop.
-              prop = moduleDep.path[1] || null;
-
-              // we also know for sure that no other argument
-              // could be the provider of this dependency
-              delayedActions = [];
-              addModule(loadModule(id, module), prop, module);
-              break;
-            }
-          }
-
-          delayedActions.push(-> addModule(loadModule(id, module), prop, module));
-        }
-        delayedActions .. seq.each(a -> a());
-      }
+      addModuleDependency(module, moduleDep);
     }
   }
 
