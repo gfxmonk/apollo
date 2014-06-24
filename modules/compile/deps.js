@@ -1140,8 +1140,6 @@ function add_stmt(stmt, pctx) {
                 root = root.parent;
               }
             }
-            console.log("applying ALL scopes for " + root);
-
             if (scope.is_exports(root)) {
               applyScope(container, prop ? 'exports.' + prop : null);
             } else {
@@ -1152,10 +1150,8 @@ function add_stmt(stmt, pctx) {
           if (stmt.scope === scope) {
             // toplevel var: apply this scope
             applyScope(container, assert(stmt.name));
-          } else {
           }
 
-          console.log("applying ALL scopes for " + stmt);
           // also apply any scopes adopted by its values
           for (var vali=0; vali<stmt.values.length; vali++) {
             add_scope_from(stmt.values[vali]);

@@ -159,6 +159,7 @@ context {||
       s.bundleSettings = {
         strip: true,
         resources: [[s.tmp, '']],
+        compile:true,
       };
 
       var basename = url -> url.replace(/^.*\//, '').replace(/\.sjs$/, '')
@@ -185,27 +186,56 @@ context {||
 
       s.getExports = function(deps) {
         var contents = bundle.generateBundle(deps.all, s.bundleSettings) .. @join('\n');
-        var libBundle = evaluateBundle(contents).m
+        var modules = evaluateBundle(contents).m
           .. @ownPropertyPairs
           .. @map(([k,v]) -> [basename(k),v])
-          .. @pairsToObject()
-          .. @get('lib');
+          .. @pairsToObject();
 
-        var args = {
-          exports: {},
-          require: -> null,
-          __onimodulename: 'lib.sjs',
-          __oni_altns: {},
+        var libModule = modules .. @get('lib');
+
+        var makeDescriptor = function() {
         };
-        args.module = {exports: args.exports};
-          
-        var argNames = require.extensions['sjs'].module_args;
-        var flatArgs = argNames .. @map(k -> args .. @get(k));
 
-        @info("evaluating", libBundle);
-        new Function(argNames .. @join(','), libBundle).apply(null, flatArgs);
-        @info("got exports:", args.module.exports);
-        return args.module.exports;
+        var moduleCache = {};
+        var loadModule = function(id) {
+          id = basename(id);
+          if (!moduleCache .. @hasOwn(id)) {
+            @info("Loading: ", id);
+            var desc = {
+              exports: {},
+              require: function(mods) {
+                if (!Array.isArray(mods)) mods = [mods];
+                @info("requiring: ", mods);
+                var exports = mods .. @map(function(mod) {
+                  if (@isString(mod)) mod = {id:mod};
+                  var exports = loadModule(mod .. @get('id'));
+                  if ('name' in mod) {
+                    var rv = {};
+                    rv[mod.name] = exports;
+                    exports = rv;
+                  }
+                  return exports;
+                });
+                @info ("merging exports:", exports);
+                return exports .. @merge();
+              },
+              __onimodulename: id,
+              __oni_altns: {},
+            };
+            desc.module = {exports: desc.exports};
+
+            var argNames = require.extensions['sjs'].module_args;
+            var flatArgs = argNames .. @map(k -> desc .. @get(k));
+            var moduleBody = modules .. @get(id);
+            @info("evaluating: " + moduleBody);
+            moduleCache[id] = desc;
+            (moduleBody).apply(null, flatArgs);
+            @info("got exports:", desc.module.exports);
+          }
+          return moduleCache[id].module.exports;
+        }
+
+        return loadModule('lib');
       };
  
     }
@@ -404,8 +434,8 @@ context {||
 
       deps.sub_full.exports .. @sort .. @assert.eq(['full1']);
       deps.sub_individual.exports .. @sort .. @assert.eq(['individual1']);
-      //can't evaluate this currently (limited test scaffolding)
-      //s.getExports(deps).run() .. @assert.eq(['individual 1', 'full 1']);
+      var exports = s.getExports(deps);
+      exports.run() .. @assert.eq(['individual 1', 'full 1']);
     }
 
     test("TODOs") {||
