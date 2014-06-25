@@ -400,42 +400,67 @@ context {||
       exports.prop .. @assert.eq("property!");
     }
 
-    test("modules that re-export their dependencies") {|s|
-      @fs.writeFile(@path.join(s.tmp, "std.sjs"), '
-        /**
-          @reexports-dependencies
-        */
-
-        module.exports = require([
-          "./sub_full",
-          {id: "./sub_individual", name:"individual"},
-        ]);
+    context("modules that re-export their dependencies") {||
+      test.beforeEach {|s|
+        @fs.writeFile(@path.join(s.tmp, "sub_full"), '
+          exports.full1 = "full 1";
+          exports.full2 = "full 2";
         ');
 
-      @fs.writeFile(@path.join(s.tmp, "sub_full"), '
-        exports.full1 = "full 1";
-        exports.full2 = "full 2";
-      ');
+        @fs.writeFile(@path.join(s.tmp, "sub_individual"), '
+          exports.individual1 = "individual 1";
+          exports.individual2 = "individual 2";
+        ');
 
-      @fs.writeFile(@path.join(s.tmp, "sub_individual"), '
-        exports.individual1 = "individual 1";
-        exports.individual2 = "individual 2";
-      ');
+        s.testStdlib = function(contents, splatter) {
+          @fs.writeFile(@path.join(s.tmp, "std.sjs"), contents);
+          var deps = s.getDeps(['run'], '
+            var m = require("./std");
+            exports.run = function() {
+              return [
+                m.individual.individual1,
+                m.full1
+              ];
+            }
+          ');
 
-      var deps = s.getDeps(['run'], '
-        var m = require("./std");
-        exports.run = function() {
-          return [
-            m.individual.individual1,
-            m.full1
+          deps .. @ownKeys .. @filter(x -> x !== 'all') .. @sort .. @assert.eq(['lib', 'main', 'std', 'sub_full','sub_individual']);
+          deps.sub_full.exports .. @sort .. @assert.eq(
+            splatter ? ['full1','individual'] : ['full1']);
+          deps.sub_individual.exports .. @sort .. @assert.eq(['individual1']);
+          var exports = s.getExports(deps);
+          exports.run() .. @assert.eq(['individual 1', 'full 1']);
+        };
+      }
+
+      test("static") {|s|
+        s.testStdlib('
+          /**
+            @reexports-dependencies
+          */
+
+          module.exports = require([
+            "./sub_full",
+            {id: "./sub_individual", name:"individual"},
+          ]);
+        ');
+      }
+
+      test("dynamic (but deterministic) module sets") {|s|
+        s.testStdlib('
+          /**
+            @reexports-dependencies
+          */
+
+          var req = [
+            "./sub_full",
           ];
-        }
-      ');
-
-      deps.sub_full.exports .. @sort .. @assert.eq(['full1']);
-      deps.sub_individual.exports .. @sort .. @assert.eq(['individual1']);
-      var exports = s.getExports(deps);
-      exports.run() .. @assert.eq(['individual 1', 'full 1']);
+          req = req.concat([
+            {id: "./sub_individual", name:"individual"},
+          ]);
+          module.exports = require(req);
+        ', true);
+      }
     }
 
     test("TODOs") {||
@@ -448,6 +473,11 @@ context {||
       //
       //  - special case tests against `hostenv` to explicitly include
       //    xbrowser-block statements as toplevel blocks?
+      //
+      //  - if we use exports from `foo` but it doesn't provide that,
+      //    skip module entirely (to deal with ambiguity of indirect modules)
+      //    ^ maybe only do this when indirection is in play? If we
+      //    _specifically_ use foo.bar, then we ought to includ foo
     }
   }
 

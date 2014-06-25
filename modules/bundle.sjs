@@ -385,25 +385,21 @@ function findDependencies(sources, settings) {
     }
   }
 
-  function canonicalizeRequireArguments(args) {
-    // turn require(a, opts) -> require(a)
-    if (Array.isArray(args)) {
-      args = args[0];
-    }
-
+  function canonicalizeRequireArgument(arg) {
+    var mods = arg;
     // turn require(a) -> require([a])
-    if (!Array.isArray(args)) {
-      args = [args];
+    if (!Array.isArray(mods)) {
+      mods = [mods];
     }
 
-    return args .. seq.map(function(arg) {
-      var id = arg;
+    return mods .. seq.map(function(mod) {
+      var id = mod;
       var name = null;
 
       if (typeof(id) !== 'string') {
-        id = arg.id;
-        if (!id) throw new Error("require() argument without \`id\`: " + JSON.stringify(arg));
-        name = arg.name || null;
+        id = mod.id;
+        if (!id) throw new Error("require() argument without \`id\`: " + JSON.stringify(mod));
+        name = mod.name || null;
       }
 
       return {
@@ -430,10 +426,7 @@ function findDependencies(sources, settings) {
     }
     logging.verbose("Adding moduleDependency: " + moduleDep + " (" + path + ")");
 
-    var args = moduleDep.args .. canonicalizeRequireArguments();
-    if (!Array.isArray(args)) {
-      args = [args];
-    }
+    var args = moduleDep.arg .. canonicalizeRequireArgument();
     logging.debug("canonicalized args: ", args);
 
     var delayedActions = [];

@@ -25,8 +25,9 @@
 var Object_prototype = Object.getPrototypeOf({}); // not the same as Object.prototype in nodejs sandbox
 var has = function(o,k) { return Object.prototype.hasOwnProperty.call(o,k); };
 var str = function(obj) {
+  if (obj == null) return '<null>';
   if (Array.isArray(obj)) {
-    return "[" + obj.join(", ") + "]";
+    return "[" + obj.map(str).join(", ") + "]";
   }
   if (obj && (obj.toString === Object_prototype.toString)) {
     var pairs = [];
@@ -39,6 +40,24 @@ var str = function(obj) {
   return String(obj);
 };
 var assert = function(cond, desc) { if (!cond) throw new Error(desc || "Assertion failed"); return cond };
+
+var nonReentrantCounter = 0;
+var nonReentrant = function(default_value, fn) {
+  var id = nonReentrantCounter++;
+  return function() {
+    if (!this.reentrancy_state) this.reentrancy_state=[];
+    if (this.reentrancy_state[id]) {
+      console.log("reentrant on " + str(this) + ", returning default");
+      return default_value;
+    }
+    this.reentrancy_state[id] = true;
+    try {
+      return fn.apply(this, arguments);
+    } finally {
+      this.reentrancy_state[id] = false;
+    }
+  }
+}
 
 var _scope_ctr = 1;
 function Scope(parent, pctx) {
@@ -62,16 +81,20 @@ Scope.prototype.add_ident = function(ident) {
   this.identifiers.push(ident);
 };
 
-Scope.prototype.end = function() {
+Scope.prototype.convert_unused_identifiers_into_references = function(stmt) {
   for (var i=0; i<this.identifiers.length; i++) {
     var ident = this.identifiers[i];
     if (!ident.used) {
       console.log("turning otherwise-unused Id into variable reference: " + ident);
       this.get_var(ident.name);
+      console.log("and now current_stmt= " + str(this.pctx.current_stmt));
+      console.log("and now current_stmt.references = " + str(this.pctx.current_stmt.references));
+    } else {
+      console.log("ident was used: " + str(ident));
     }
   }
-  delete this.identifiers;
-};
+  this.identifiers = [];
+}
 
 Scope.prototype.add_var = function(name) {
   if (name instanceof ObjectLit) {
@@ -87,6 +110,7 @@ Scope.prototype.add_var = function(name) {
     }
     return;
   } else if (name instanceof Id) {
+    name.use();
     name = name.name;
   }
   if (typeof(name) !== 'string') {
@@ -122,13 +146,13 @@ Scope.prototype.get_var = function(v) {
   return new Ref(this.add_var(v), this.pctx);
 };
 
-function ModuleReference(args, path) {
-  this.args = assert(args, "null arguments given to ModuleReference");
+function ModuleReference(arg, path) {
+  this.arg = assert(arg, "null arguments given to ModuleReference");
   assert(Array.isArray(path), "empty path given to ModuleReference");
   this.path = path;
 };
 ModuleReference.prototype.toString = function() {
-  return "ModuleReference(" + str(this.args) + ", " + str(this.path) + ")";
+  return "ModuleReference(" + str(this.arg) + ", " + str(this.path) + ")";
 };
 
 function SelfReference() { };
@@ -145,8 +169,8 @@ function tapLog(desc, val) {
 var process_script = function(pctx) {
   var scope = current_scope(pctx);
   var stmts = seq(scope.stmts);
-  console.log(stmts.flatten());
-  console.log(str(scope));
+  // console.log(stmts.flatten());
+  // console.log(str(scope));
   return {
     requires: stmts.flatten(),
     toplevel: scope,
@@ -173,7 +197,7 @@ var Just = function(x) {
     get: function() { return x; },
     getLazy: function(_) { return x; },
     orElse: function(_) { return this; },
-    toString: function () { return "Just(" + x + ")"; },
+    toString: function () { return "Just(" + str(x) + ")"; },
   };
 };
 
@@ -239,6 +263,14 @@ var flattenAnyM = function(arr) {
   return any ? Just(ret) : Nothing();
 };
 
+var concat = function(arr) {
+  var rv = [];
+  for (var i=0; i<arr.length; i++) {
+    rv = rv.concat(arr[i]);
+  }
+  return rv;
+};
+
 
 // Minimal AST
 //
@@ -267,13 +299,19 @@ var Dynamic = {
   // combinators
   seq: function(other) { return other; },
   dot: function(prop) { return Dynamic; },
-  call: function(args) { return Dynamic; },
+  call: function(args) { return new Call(this, args); },
 
   // scope:
   exportScope: undefined,
 
   // values
   staticValue: Nothing,                 // statically-determined value (an eval()-able string)
+  possibleValues: function() {          // default to just this.staticValue()
+    console.log("default possibleValues of " + str(this));
+    var rv = this.staticValue().map(function(val) { return [val]; }).get([]);
+    console.log("got default possibleValues :" + str(rv));
+    return rv;
+  },
   // text: Nothing,                        // source code representation
   flatten: function() { return []; },   // Return all non-dynamic children
   toString: function() { return "Dynamic()"; },
@@ -298,28 +336,35 @@ var Property = function(parent, text, pctx) {
 Property.prototype = Object.create(Dynamic);
 Property.prototype.staticValue = function() {
   var self = this;
-  return this.parent.staticValue.map (function(val) {
+  return this.parent.staticValue().map (function(val) {
     return val + "." + self.name;
   });
 };
 Property.prototype.toString = function() {
   return str(this.parent) + "." + this.name;
 }
-
 // Identifier
+var __id_ctr = 0;
 var Id = function(text, scope) {
-  console.log("INIT ID: " + text);
   this.name = text;
   this.scope = scope;
   this.used = false;
+  this._ctr = __id_ctr++;
+  console.log("INIT ID: " + str(this));
 };
 Id.prototype = Object.create(Dynamic);
-Id.prototype.toString = function() { return "Id(" + this.name + ")"; };
+Id.prototype.toString = function() { return "Id#" + this._ctr + "(" + this.name + ")"; };
+Id.prototype.use = function() {
+  // mark this identifier as "used". At the end of each toplevel
+  // stmt, we assume all unused identifiers are actually
+  // reference expressions
+  this.used = true;
+};
 
 // delegate `dot`, `assign`, etc to underlying variable
-;['dot','assign', 'call'].forEach(function(method) {
+;['dot','assign', 'call', 'possibleValues','staticValue'].forEach(function(method) {
   Id.prototype[method] = function() {
-    this.used = true;
+    this.use();
     var variable = this.scope.get_var(this.name);
     return variable[method].apply(variable, arguments);
   };
@@ -335,15 +380,21 @@ var Variable = function(text, scope) {
   // console.log("ID: " + this, this.scopes);
 };
 Variable.prototype = Object.create(Dynamic);
-Variable.prototype.call = function(args) {
-  var call = new Call(this, args);
-  console.log("CALL: " + call);
-  return call;
-};
 Variable.prototype.staticValue = function() {
-  console.log("TODO: Variable.staticValue", this, this.values);
+  console.log("TODO: Variable.staticValue" + str(this));
   return Nothing();
 };
+
+Variable.prototype.possibleValues = nonReentrant([], function() {
+  // just like staticValues, but produces an
+  // array of possible alternatives
+  console.log("getting possible values from Variable");
+  var possible = this.values.map(function(v) {
+    console.log("variable traversal: possible values of " + str(v) + " = " + str(v.possibleValues()));
+    return v.possibleValues();
+  });
+  return concat(possible);
+});
 
 Variable.prototype.dot = Property.prototype.dot = function(name) {
   if (!has(this.children, name)) {
@@ -377,6 +428,10 @@ Ref.prototype.staticValue = function() {
   return this.dest.staticValue();
 };
 
+Ref.prototype.possibleValues = function() {
+  return this.dest.possibleValues();
+};
+
 Ref.prototype.deref = function() {
   this.pctx.current_stmt.remove_reference(this);
 };
@@ -405,7 +460,7 @@ var Statement = function() {
 }
 Statement.prototype = Object.create(Dynamic);
 Statement.prototype.toString = function() {
-  return 'Stmt{'+this.stmt.toString() +'}';
+  return 'Stmt{'+str(this.stmt) +'}';
 };
 Statement.prototype.add_reference = function(ref) {
   console.log("+REF: " + ref);
@@ -420,6 +475,7 @@ Statement.prototype.remove_reference = function(ref) {
 };
 Statement.prototype.set = function(stmt) {
   if (this.stmt) throw new Error("Can't re-assign " + this.stmt + " to " + stmt);
+  console.log("Setting stmt to " + str(stmt));
   this.stmt = stmt;
 };
 
@@ -429,49 +485,63 @@ Statement.prototype.calculateDependencies = function(toplevel) {
 };
 
 function determineModuleReferences(node, path) {
-  var module = null;
-  path = path ? path.slice() : [];
-
-  console.log("Checking reference " + node +", path = " + str(path));
-  while(true) {
-    if (this.is_exports(node) && path.length == 0) {
-      console.log("raw EXPORTS reference!");
-      return [new SelfReference()];
-    }
-
-    if (node instanceof Property) {
-      // keep traversing parent
-      path.unshift(node.name);
-      node = node.parent;
-    } else if (node instanceof Call) {
-      console.log("Checking call of: " + node.expr);
-      if (node.expr === this.require) {
-        return node.staticArgs().map(function(args) {
-          var moduleRef = new ModuleReference(args, path);
-          console.log("yup! require call:" + moduleRef);
-          return [moduleRef];
-        }).getLazy(function() {
-          console.log("require call with dynamic args");
-          return [];
-        });
-      } else {
-        // not a require call - but maybe a property of some required module:
-        path = [];
-        node = node.expr;
-      }
-    } else if (node instanceof Variable) {
-      var rv = [];
-      for (var valIdx = 0; valIdx < node.values.length; valIdx++) {
-        console.log("traversing variable " + node + " value: " + node.values[valIdx]);
-        rv = rv.concat(determineModuleReferences.call(this, node.values[valIdx], path));
-      }
-      return rv;
-    } else {
-      console.log("unknown thing! " + node);
-      module = null;
+  var seen = [];
+  var inner = function(node, path) {
+    if (seen.indexOf(node) !== -1) {
+      console.log("CYCLIC NODE: " + str(node));
       return [];
     }
-  }
+    seen.push(node);
+    var module = null;
+    path = path ? path.slice() : [];
+
+    console.log("Checking reference " + node +", path = " + str(path));
+    while(true) {
+      if (this.is_exports(node) && path.length == 0) {
+        console.log("raw EXPORTS reference!");
+        return [new SelfReference()];
+      }
+
+      if (node instanceof Property) {
+        // keep traversing parent
+        path.unshift(node.name);
+        node = node.parent;
+      } else if (node instanceof Call) {
+        console.log("Checking call of: " + node.expr);
+        if (node.expr === this.require && node.args.length > 0) {
+          var arg = node.args[0];
+          var alternatives = arg.possibleValues();
+          if (alternatives.length > 0) {
+            console.log("Checking all possible argument values:" + str(alternatives));
+            return alternatives.map(function(arg) {
+              var moduleRef = new ModuleReference(arg, path);
+              console.log("yup! require call:" + moduleRef);
+              return moduleRef;
+            });
+          } else {
+            console.log("NOT Checking all possible argument values (there are none):" + str(arg));
+            return [];
+          }
+        } else {
+          // not a require call - but maybe a property of some required module:
+          path = [];
+          node = node.expr;
+        }
+      } else if (node instanceof Variable) {
+        var rv = [];
+        for (var valIdx = 0; valIdx < node.values.length; valIdx++) {
+          console.log("traversing variable " + node + " value: " + node.values[valIdx]);
+          rv = rv.concat(inner.call(this, node.values[valIdx], path));
+        }
+        return rv;
+      } else {
+        console.log("unknown thing! " + node);
+        module = null;
+        return [];
+      }
+    }
+  };
+  return inner.apply(this, arguments);
 };
 
 Statement.prototype.calculateDirectDependencies = function(toplevel) {
@@ -637,12 +707,79 @@ Seq.prototype.toString = function() { return "Seq(" + this.a + "," + this.b + ")
 var Call = function(expr, args) {
   this.expr = expr;
   this.args = args;
+  this.capturePossibleValues();
 };
 Call.prototype = Object.create(Dynamic);
 Call.prototype.seq = function(other) { return new Seq(this, other); };
 Call.prototype.dot = function(property) {
   return new Property(this, property);
 };
+
+Call.prototype.capturePossibleValues = function() {
+  // capture possible values at expression parse time, in order
+  // to better resolve cyclical values
+  var expr = this.expr;
+  if (expr instanceof Ref) expr = assert(expr.dest);
+  if (expr instanceof Property) {
+    this._possibleSubjects = expr.parent.possibleValues();
+    this._possibleArgs = this.args.map(function(arg) { return arg.possibleValues(); });
+    this._expr = this.expr;
+  }
+};
+
+Call.prototype.possibleValues = nonReentrant([], function() {
+  // XXX we're only implementing enough here to be useful
+  // to the typical use case of concatenating array literals
+  var rv = [];
+  
+  console.log("determining possible values of some method " + str(this));
+  console.log("expr is " + str(this.expr));
+  console.log("its parent is " + str(this.expr.parent));
+  var expr = this._expr;
+  if (expr) {
+    console.log("determining possible values of method " + str(this));
+    var possibleSubjects = this._possibleSubjects;
+    console.log("possibleSubjects from " + str(expr.parent) + " are: " + str(possibleSubjects));
+
+    for (var subji=0;subji<possibleSubjects.length;subji++) {
+      var subject = possibleSubjects[subji];
+      if (!Array.isArray(subject)) {
+        console.log("Skipping non-array subject: " + str(subject));
+        continue;
+      }
+      var method = Array.prototype[expr.name];
+      if (!method) {
+        console.log("can't statically resolve array method " + expr.name);
+        continue;
+      }
+      // generate a cross-product of all possible values of all arguments
+      var argPossibilities = this._possibleArgs;
+      if (argPossibilities.length != 1) {
+        console.log("XXX implement multile arguments");
+        continue;
+      }
+
+      var possibleValues = argPossibilities[0];
+      console.log("argPossibilities = " + str(possibleValues));
+      for (var i=0; i<possibleValues.length; i++) {
+        try {
+          var copy = subject.slice();
+          var result = method.call(copy, possibleValues[i]);
+          if (result) {
+            rv.push(result);
+          } else {
+            // XXX we could skip this if `copy`.eq(parent), but it does no harm
+            rv.push(copy);
+          }
+        } catch(e) {
+          console.log("error statically resolving " + str(this) + ":\n" + e + "\n" + e.stack);
+        }
+      }
+    }
+  }
+  console.log("possible value: -> " + str(rv));
+  return rv;
+});
 
 Call.prototype.staticArgs = function() {
   // returns Maybe [staticValue]
@@ -801,7 +938,7 @@ function push_scope(pctx) {
 
 function pop_scope(pctx) {
   var scope = pctx.scopes.pop();
-  scope.end();
+  scope.convert_unused_identifiers_into_references();
   console.log("-- SCOPE");
   return scope;
 }
@@ -832,6 +969,7 @@ function add_stmt(stmt, pctx) {
     if (top) {
       var container = pctx.current_stmt;
       container.set(stmt);
+      scope.convert_unused_identifiers_into_references();
       pctx.current_stmt = new Statement();
 
       function add_scope_from(stmt, do_default) {
@@ -1058,7 +1196,7 @@ function gen_crf(crf) {
 
 #define GEN_IDX_ACCESSOR(l, idxexp, pctx) return l.dot(idxexp);
 
-#define GEN_FUN_CALL(l, args, pctx) return l.call(args);
+#define GEN_FUN_CALL(l, args, pctx) console.log("CALLING:" + str(l)); return l.call(args);
 
 #define GEN_FUN_EXP(fname, pars, body, pctx, implicit_return) console.log("FUNBOD: " + str(body)); return body;
 
