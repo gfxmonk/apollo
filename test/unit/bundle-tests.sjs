@@ -164,9 +164,10 @@ context {||
 
       var basename = url -> url.replace(/^.*\//, '').replace(/\.sjs$/, '')
 
+      @fs.writeFile(@path.join(s.tmp, 'dep_a.sjs'), '// intentionally blank');
+      @fs.writeFile(@path.join(s.tmp, 'dep_b.sjs'), '// intentionally blank');
+
       s.getDeps = function dependUpon(propertyNames, modsrc) {
-        @fs.writeFile(@path.join(s.tmp, 'dep_a.sjs'), '// intentionally blank');
-        @fs.writeFile(@path.join(s.tmp, 'dep_b.sjs'), '// intentionally blank');
         @fs.writeFile(@path.join(s.tmp, 'lib.sjs'), modsrc);
         var mainPath = @path.join(s.tmp, 'main.sjs');
         @fs.writeFile(mainPath, "
@@ -503,21 +504,22 @@ context {||
       }
     }
 
-    test("TODOs") {||
-      assert.fail("IMPLEMENT ME!");
-      // To test:
-      //
-      //  - test that dependencies are piped through `std` modules
-      //    e.g a dependency on <sjs:std>.prop gets mapped through to
-      //      <any-dep-of-std>.prop
-      //
-      //  - special case tests against `hostenv` to explicitly include
-      //    xbrowser-block statements as toplevel blocks?
-      //
-      //  - if we use exports from `foo` but it doesn't provide that,
-      //    skip module entirely (to deal with ambiguity of indirect modules)
-      //    ^ maybe only do this when indirection is in play? If we
-      //    _specifically_ use foo.bar, then we ought to includ foo
+    test('modules which are incidentally imported alongside a used module are blank') {|s|
+      @fs.writeFile(@path.join(s.tmp, 'dep_a.sjs'), 'exports.aa = "aa";');
+      @fs.writeFile(@path.join(s.tmp, 'dep_b.sjs'), '
+        throw new Error("dep_b module contents was included");
+      ');
+
+      // bundler can determine that @aa is provided by ./dep_a, so
+      // dep_b is actually unused (but still required in the bundle)
+
+      var exports = s.getDeps(['run'], "
+        @ = require(['./dep_a', './dep_b']);
+        exports.run = function() {
+          return @aa;
+        }
+      ") .. s.getExports;
+      exports.run() .. @assert.eq('aa');
     }
   }
 

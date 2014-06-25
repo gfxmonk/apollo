@@ -99,7 +99,7 @@ var str = require('sjs:string');
 var regexp = require('sjs:regexp');
 var { split, rsplit, startsWith } = str;
 var object = require('sjs:object');
-var { hasOwn, ownKeys, ownValues, ownPropertyPairs } = object;
+var { get, hasOwn, ownKeys, ownValues, ownPropertyPairs } = object;
 var docutil = require('sjs:docutil');
 var assert = require('sjs:assert');
 var logging = require('sjs:logging');
@@ -339,25 +339,33 @@ function findDependencies(sources, settings) {
   function addModule(module, path, parent) {
     if (!module) return; // this will have already printed a warning
     if (path == null) path = [];
+    if (path === false) path = [false];
     if (!Array.isArray(path)) {
       throw new Error("invalid `path`: " + JSON.stringify(path));
     }
     if (!settings.strip) path = [];
     if (parent) {
       logging.verbose("Adding dependency on #{module.id}##{path} from #{parent.id}");
+      console.log(path, module.exports);
     } else {
-      logging.debug("Processing module: #{module.id}");
+      logging.debug("Adding dependency on #{module.id} (toplevel)");
       path = [];
     }
 
-    var property = path[0] || null;
+    var property = path.length == 0 ? null : path[0];
 
+    module.required = true;
+    if (property === false) {
+      // don't do anything more than including the empty module
+      console.log("including empty module: ", module.id);
+      return;
+    }
+    console.log("EXPORTS", module);
     if (module.exports .. seq.hasElem(property)) {
       // already processed
       return;
     }
 
-    module.required = true;
     module.exports.push(property);
     addModuleAnnotations(module, property);
 
@@ -424,37 +432,87 @@ function findDependencies(sources, settings) {
       // may be set if we're coming via a transitive depencency
       path = prefix.concat(path);
     }
+    var prop = path[0] || null;
     logging.verbose("Adding moduleDependency: " + moduleDep + " (" + path + ")");
 
     var args = moduleDep.arg .. canonicalizeRequireArgument();
     logging.debug("canonicalized args: ", args);
 
-    var delayedActions = [];
+    var providesExport = function(module, arg) {
+      // first, see if we can tell from the exclude / include args:
+      var exclude = arg .. get('exclude', []);
+      var include = arg .. get('include', null);
+      if (exclude .. seq.hasElem(prop)) return false;
+      if (include && include .. seq.hasElem(prop)) return true;
+
+      var exportName = "exports.#{prop}";
+      module.stmts .. seq.each {|stmt|
+        console.log("testing stmt:" + stmt, ownKeys(stmt) .. toArray);
+        console.log("does ", stmt.exportScope, "include:", prop);
+        if (stmt.exportScope.indexOf(exportName) !== -1) {
+          console.log("found #{exportName} in #{stmt} of #{module.id}");
+          return true;
+        }
+      }
+      return false;
+    };
+
+
+    var potentialDeps = [];
+    var found = [];
     args .. seq.each {|arg|
       var {id, name} = arg;
-      var prop = path[0] || null;
+      var required = false;
 
       console.log("adding module? " + id + "#" + prop);
+      var dep = loadModule(id, module, name || null);
       if (name) {
-        if (prop !== null && prop !== name) {
-          console.log("NOPE: we only want " + name);
-          // we're not accessing something under this module
-          continue;
+        if (prop === name) {
+          // `require({id:mod, name:prop}).prop.foo`
+          // is a reference to mod.foo, not mod.prop.
+          // we also know for sure that no other argument
+          // could be the provider of this dependency
+          found.push([dep, path.slice(1)]);
+          //addModule(loadModule(id, module, name), path.slice(1));
+        } else {
+          if (prop) {
+            console.log("NOPE: we only want " + name);
+            // we're not accessing something under this module
+            potentialDeps.push([dep, false]);
+          } else {
+            potentialDeps.push([dep, path.slice(1)]);
+          }
         }
-
-        // `require({id:mod, name:prop}).prop.foo`
-        // is a reference to mod.foo, not mod.prop.
-        // we also know for sure that no other argument
-        // could be the provider of this dependency
-        delayedActions = [];
-        console.log("Cancel that, only adding module " + id);
-        addModule(loadModule(id, module, name), path.slice(1), module);
-        break;
+      } else {
+        // unnamed - treat as a merge import
+        if (dep) {
+          if (prop && providesExport(dep, arg)) {
+            found.push([dep, path]);
+          } else {
+            potentialDeps.push([dep, path]);
+          }
+        }
       }
-
-      delayedActions.push(-> addModule(loadModule(id, module, null), path, module));
     }
-    delayedActions .. seq.each(a -> a());
+
+    var isFound = found.length > 0;
+    if (found.length > 1) {
+      logging.info("Multiple modules matched #{path[0]}");
+    }
+    found .. seq.each {|[dep, path]|
+      if (dep) {
+        console.log("found provider of #{prop} at #{dep.id}");
+      }
+      addModule(dep, path, module);
+    }
+
+    if (!isFound && prop) {
+      logging.info("Couldn't determine which module provides #{prop}");
+    }
+
+    potentialDeps .. seq.each {|[dep, path]|
+      addModule(dep, isFound ? false : path, module);
+    }
   };
 
   var seenStatements = [];
