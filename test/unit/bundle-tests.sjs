@@ -521,6 +521,19 @@ context {||
       ") .. s.getExports;
       exports.run() .. @assert.eq('aa');
     }
+
+    test('side-effect modules are kept') {|s|
+      // if we require() a module and don't assign the results
+      // anywhere, that module's non-export statements should
+      // be included under the assumption it's being required
+      // for its side effects.
+      @fs.writeFile(@path.join(s.tmp, 'dep_a.sjs'), 'throw new Error("a was imported")');
+      var deps = s.getDeps(['run'], "
+        require('./dep_a');
+        exports.run = 1;
+      ");
+      assert.raises({message: 'a was imported'}, -> s.getExports(deps));
+    }
   }
 
 }.serverOnly();
