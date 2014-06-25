@@ -167,9 +167,9 @@ function findDependencies(sources, settings) {
     var stmts = []; // XXX for debugging only
     var rv = function(index) {
       assert.notEq(index, undefined);
-      if (indexes[index] === true) {
-        console.log('KEEP[' + index + ']: ' + stmts[index]);
-      }
+      //if (indexes[index] === true) {
+      //  console.log('KEEP[' + index + ']: ' + stmts[index]);
+      //}
       return indexes[index] === true;
     };
     rv.add = function(stmt) {
@@ -347,7 +347,6 @@ function findDependencies(sources, settings) {
     if (!settings.strip) path = [];
     if (parent) {
       logging.verbose("Adding dependency on #{module.id}##{path} from #{parent.id}");
-      console.log(path, module.exports);
     } else {
       logging.debug("Adding dependency on #{module.id} (toplevel)");
       path = [];
@@ -358,10 +357,9 @@ function findDependencies(sources, settings) {
     module.required = true;
     if (property === false) {
       // don't do anything more than including the empty module
-      console.log("including empty module: ", module.id);
+      logging.debug("including empty module: ", module.id);
       return;
     }
-    console.log("EXPORTS", module);
     if (module.exports .. seq.hasElem(property)) {
       // already processed
       return;
@@ -434,11 +432,9 @@ function findDependencies(sources, settings) {
       path = prefix.concat(path);
     }
     var prop = path[0] || null;
-    logging.verbose("Adding moduleDependency: " + moduleDep + " (" + path + ")");
+    logging.verbose("Adding module dependency: " + moduleDep + " (" + path + ")");
 
     var args = moduleDep.arg .. canonicalizeRequireArgument();
-    logging.debug("canonicalized args: ", args);
-
     var providesExport = function(module, arg) {
       // first, see if we can tell from the exclude / include args:
       var exclude = arg .. get('exclude', []);
@@ -448,10 +444,7 @@ function findDependencies(sources, settings) {
 
       var exportName = "exports.#{prop}";
       module.stmts .. seq.each {|stmt|
-        console.log("testing stmt:" + stmt, ownKeys(stmt) .. toArray);
-        console.log("does ", stmt.exportScope, "include:", prop);
         if (stmt.exportScope.indexOf(exportName) !== -1) {
-          console.log("found #{exportName} in #{stmt} of #{module.id}");
           return true;
         }
       }
@@ -465,7 +458,6 @@ function findDependencies(sources, settings) {
       var {id, name} = arg;
       var required = false;
 
-      console.log("adding module? " + id + "#" + prop);
       var dep = loadModule(id, module, name || null);
       if (name) {
         if (prop === name) {
@@ -477,7 +469,6 @@ function findDependencies(sources, settings) {
           //addModule(loadModule(id, module, name), path.slice(1));
         } else {
           if (prop) {
-            console.log("NOPE: we only want " + name);
             // we're not accessing something under this module
             potentialDeps.push([dep, false]);
           } else {
@@ -498,17 +489,17 @@ function findDependencies(sources, settings) {
 
     var isFound = found.length > 0;
     if (found.length > 1) {
-      logging.info("Multiple modules matched #{path[0]}");
+      logging.info("Multiple modules seem to provide #{prop}");
     }
     found .. seq.each {|[dep, path]|
       if (dep) {
-        console.log("found provider of #{prop} at #{dep.id}");
+        logging.debug("Found provider of #{prop}: #{dep.id}");
       }
       addModule(dep, path, module);
     }
 
     if (!isFound && prop) {
-      logging.info("Couldn't determine which module provides #{prop}");
+      logging.debug("Couldn't determine which module provides #{prop}");
     }
 
     potentialDeps .. seq.each {|[dep, path]|
@@ -521,7 +512,7 @@ function findDependencies(sources, settings) {
     if (seenStatements.indexOf(statement) !== -1) return;
     seenStatements.push(statement);
 
-    logging.debug("Adding statement: " + statement);
+    //logging.debug("Adding statement: " + statement);
     module.statementFilter.add(statement);
 
     statement.dependencies .. seq.each {|dep|
@@ -570,10 +561,7 @@ function findDependencies(sources, settings) {
     } else {
       strip.included = stmts .. seq.filter(function(s) {
         if (mod.statementFilter(s.index)) {
-          //console.log("KEEP stmt: " + s);
           return true;
-        } else {
-          //console.log("SKIP stmt: " + s);
         }
       }) .. seq.count();
     }

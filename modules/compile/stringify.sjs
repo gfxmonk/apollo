@@ -1725,7 +1725,7 @@ function parseScript(pctx) {
   while (pctx.token.id != "<eof>") {
     var stmt = parseStmt(pctx);
     
-    var stmt_str = stmt+flush_newlines(pctx);                                      if (!pctx.statementFilter || pctx.statementFilter(pctx.stmt_index++)) {          top_scope(pctx).stmts.push(stmt_str);                                          console.log("KEPT[" + (pctx.stmt_index-1) + "]: " + stmt_str);   } else {                                                                         top_scope(pctx).stmts.push(stmt_str.replace(everything_but_newlines, ''));   };
+    var stmt_str = stmt+flush_newlines(pctx);                                      if (!pctx.statementFilter || pctx.statementFilter(pctx.stmt_index++)) {          top_scope(pctx).stmts.push(stmt_str);                                        } else {                                                                         top_scope(pctx).stmts.push(stmt_str.replace(everything_but_newlines, ''));   };
   }
   return '"'+pop_scope(pctx).stmts.join("")+'"';
 }

@@ -313,6 +313,13 @@ GEN_QUASI(parts, pctx) with even parts=strings, odd parts=expressions
 //----------------------------------------------------------------------
 // helpers:
 
+var DEP_LOG = function() {
+  if (process.env['DEP_LOG']) {
+    return function() { console.log.apply(this,arguments); };
+  }
+  return function() {};
+}();
+
 var Object_prototype = Object.getPrototypeOf({}); // not the same as Object.prototype in nodejs sandbox
 var has = function(o,k) { return Object.prototype.hasOwnProperty.call(o,k); };
 var str = function(obj) {
@@ -341,7 +348,7 @@ var nonReentrant = function(default_value, fn) {
   return function() {
     if (!this.reentrancy_state) this.reentrancy_state=[];
     if (this.reentrancy_state[id]) {
-      console.log("reentrant on " + str(this) + ", returning default");
+      DEP_LOG("reentrant on " + str(this) + ", returning default");
       return default_value;
     }
     this.reentrancy_state[id] = true;
@@ -379,12 +386,10 @@ Scope.prototype.convert_unused_identifiers_into_references = function(stmt) {
   for (var i=0; i<this.identifiers.length; i++) {
     var ident = this.identifiers[i];
     if (!ident.used) {
-      console.log("turning otherwise-unused Id into variable reference: " + ident);
+      DEP_LOG("turning otherwise-unused Id into variable reference: " + ident);
       this.get_var(ident.name);
-      console.log("and now current_stmt= " + str(this.pctx.current_stmt));
-      console.log("and now current_stmt.references = " + str(this.pctx.current_stmt.references));
     } else {
-      console.log("ident was used: " + str(ident));
+      DEP_LOG("ident was used: " + str(ident));
     }
   }
   this.identifiers = [];
@@ -418,7 +423,6 @@ Scope.prototype.add_var = function(name) {
 
   var ident = new Variable(name, this)
   this.variables[name] = ident;
-  console.log("VARIABLE: " + name + " // " + this);
   return ident;
 };
 Scope.prototype.get_var = function(v, direct) {
@@ -445,7 +449,7 @@ Scope.prototype.get_var = function(v, direct) {
 
   // `direct` means access the variable (for internal use),
   // but default use gets a reference to the given variable
-  console.log("ref() from get_var");
+  DEP_LOG("ref() from get_var");
   return new Ref(variable, this.pctx);
 };
 
@@ -465,15 +469,13 @@ SelfReference.prototype.toString = function() {
 };
 
 function tapLog(desc, val) {
-  console.log(desc, val);
+  DEP_LOG(desc, val);
   return val;
 }
 
 var process_script = function(pctx) {
   var scope = current_scope(pctx);
   var stmts = seq(scope.stmts);
-  // console.log(stmts.flatten());
-  // console.log(str(scope));
   return {
     requires: stmts.flatten(),
     toplevel: scope,
@@ -589,7 +591,7 @@ var applyScope = (function() {
     assert(typeof(scope) === 'string' || scope === null, "not a string: " + scope);
     if (!obj.exportScope) obj.exportScope = [];
     // assert(obj.exportScope === undefined, "can't scope " + obj + " to " + scope + " - already scoped to " + obj.exportScope);
-    console.log("SCOPE(" + str(scope) + "): " + str(obj));
+    DEP_LOG("SCOPE(" + str(scope) + "): " + str(obj));
     obj.exportScope.push(scope);
   };
 })();
@@ -607,10 +609,7 @@ var Dynamic = {
   // values
   staticValue: Nothing,                 // statically-determined value (an eval()-able string)
   possibleValues: function() {          // default to just this.staticValue()
-    console.log("default possibleValues of " + str(this));
-    var rv = this.staticValue().map(function(val) { return [val]; }).get([]);
-    console.log("got default possibleValues :" + str(rv));
-    return rv;
+    return this.staticValue().map(function(val) { return [val]; }).get([]);
   },
   // text: Nothing,                        // source code representation
   flatten: function() { return []; },   // Return all non-dynamic children
@@ -650,7 +649,7 @@ var Id = function(text, scope) {
   this.scope = scope;
   this.used = false;
   this._ctr = __id_ctr++;
-  console.log("INIT ID: " + str(this));
+  DEP_LOG("INIT ID: " + str(this));
 };
 Id.prototype = Object.create(Dynamic);
 Id.prototype.toString = function() { return "Id#" + this._ctr + "(" + this.name + ")"; };
@@ -677,21 +676,19 @@ var Variable = function(text, scope) {
   this.values = [];
   this.children = {};
   this.provides = [this];
-  // console.log("ID: " + this, this.scopes);
 };
 Variable.prototype = Object.create(Dynamic);
 Variable.prototype.staticValue = function() {
-  console.log("TODO: Variable.staticValue" + str(this));
+  DEP_LOG("TODO: Variable.staticValue" + str(this));
   return Nothing();
 };
 
 Variable.prototype.possibleValues = nonReentrant([], function() {
   // just like staticValues, but produces an
   // array of possible alternatives
-  console.log("getting possible values from Variable " + this);
-  console.log("value ASTs = " + str(this.values));
+  DEP_LOG("getting possible values from Variable " + this);
+  DEP_LOG("value ASTs = " + str(this.values));
   var possible = this.values.map(function(v) {
-    console.log("variable traversal: possible values of " + str(v) + " = " + str(v.possibleValues()));
     return v.possibleValues();
   });
   return concat(possible);
@@ -705,7 +702,7 @@ Variable.prototype.dot = Property.prototype.dot = function(name) {
 };
 
 Variable.prototype.assign = Property.prototype.assign = function(value) {
-  console.log(str(this) + " assuming value: " + str(value));
+  DEP_LOG(str(this) + " assuming value: " + str(value));
   this.values.push(value);
 };
 
@@ -723,7 +720,7 @@ var Ref = function(dest, pctx) {
 Ref.prototype = Object.create(Dynamic);
 
 Ref.prototype.call = function(args) {
-  console.log("REF from call: " + str(this.dest));
+  DEP_LOG("REF from call: " + str(this.dest));
   var call = this.dest.call(args, this.pctx);
   return new Ref(call, this.pctx);
 };
@@ -745,12 +742,12 @@ Ref.prototype.dot = function(name) {
   // that the code _only_ accesses <foo>.prop, and not <foo> itself.
   var underlying = this.dest.dot(name);
   this.deref();
-  console.log("REF from dot: " + str(underlying));
+  DEP_LOG("REF from dot: " + str(underlying));
   return new Ref(underlying, this.pctx);
 };
 
 Ref.prototype.assign = function(value) {
-  console.log("ASSIGNING TO " + this);
+  DEP_LOG("ASSIGNING TO " + this);
   return this.dest.assign(value);
 };
 Ref.prototype.toString = function() { return "Ref(" + this.dest + ")"; };
@@ -767,21 +764,21 @@ Statement.prototype.toString = function() {
   return 'Stmt{'+str(this.stmt) +'}';
 };
 Statement.prototype.add_reference = function(ref) {
-  console.log("+REF: " + ref);
+  DEP_LOG("+REF: " + ref);
   this.references.push(ref);
 };
 Statement.prototype.remove_reference = function(ref) {
-  console.log("+UNREF: " + ref);
+  DEP_LOG("+UNREF: " + ref);
   var idx = this.references.indexOf(ref);
   if (idx === -1) {
-    console.log("Can't find reference: " + ref + " in list: " + str(this.references));
+    DEP_LOG("Can't find reference: " + ref + " in list: " + str(this.references));
     // throw new Error("Can't find reference: " + ref + " in list: " + str(this.references));
   }
   this.references.splice(idx, 1);
 };
 Statement.prototype.set = function(stmt) {
   if (this.stmt) throw new Error("Can't re-assign " + this.stmt + " to " + stmt);
-  console.log("Setting stmt to " + str(stmt));
+  DEP_LOG("Setting stmt to " + str(stmt));
   this.stmt = stmt;
 };
 
@@ -794,17 +791,17 @@ function determineModuleReferences(node, path) {
   var seen = [];
   var inner = function(node, path) {
     if (seen.indexOf(node) !== -1) {
-      console.log("CYCLIC NODE: " + str(node));
+      DEP_LOG("CYCLIC NODE: " + str(node));
       return [];
     }
     seen.push(node);
     var module = null;
     path = path ? path.slice() : [];
 
-    console.log("Checking reference " + node +", path = " + str(path));
+    DEP_LOG("Checking reference " + node +", path = " + str(path));
     while(true) {
       if (this.is_exports(node) && path.length == 0) {
-        console.log("raw EXPORTS reference!");
+        DEP_LOG("raw EXPORTS reference!");
         return [new SelfReference()];
       }
 
@@ -813,19 +810,19 @@ function determineModuleReferences(node, path) {
         path.unshift(node.name);
         node = node.parent;
       } else if (node instanceof Call) {
-        console.log("Checking call of: " + node.expr);
+        DEP_LOG("Checking call of: " + node.expr);
         if (node.expr === this.require && node.args.length > 0) {
           var arg = node.args[0];
           var alternatives = arg.possibleValues();
           if (alternatives.length > 0) {
-            console.log("Checking all possible argument values:" + str(alternatives));
+            DEP_LOG("Checking all possible argument values:" + str(alternatives));
             return alternatives.map(function(arg) {
               var moduleRef = new ModuleReference(arg, path);
-              console.log("yup! require call:" + moduleRef);
+              DEP_LOG("yup! require call:" + moduleRef);
               return moduleRef;
             });
           } else {
-            console.log("NOT Checking all possible argument values (there are none):" + str(arg));
+            DEP_LOG("NOT Checking all possible argument values (there are none):" + str(arg));
             return [];
           }
         } else {
@@ -836,12 +833,12 @@ function determineModuleReferences(node, path) {
       } else if (node instanceof Variable) {
         var rv = [];
         for (var valIdx = 0; valIdx < node.values.length; valIdx++) {
-          console.log("traversing variable " + node + " value: " + node.values[valIdx]);
+          DEP_LOG("traversing variable " + node + " value: " + node.values[valIdx]);
           rv = rv.concat(inner.call(this, node.values[valIdx], path));
         }
         return rv;
       } else {
-        console.log("unknown thing! " + node);
+        DEP_LOG("unknown thing! " + node);
         module = null;
         return [];
       }
@@ -863,7 +860,7 @@ Statement.prototype.calculateDirectDependencies = function(toplevel) {
     for (var p = 0; p<provides.length; p++) {
       var provided = provides[p];
       if (toplevel.is_exports(provided)) {
-        console.log("Stmt " + stmt + " provides module.exports - adding self-reference");
+        DEP_LOG("Stmt " + stmt + " provides module.exports - adding self-reference");
         this.moduleDependencies.push(new SelfReference());
       }
     }
@@ -872,7 +869,7 @@ Statement.prototype.calculateDirectDependencies = function(toplevel) {
       var needed = this.references[r].dest;
       while(true) {
         if (provides.indexOf(needed) !== -1) {
-          console.log("stmt " + this + " depends on " + stmt + " because " + str(needed));
+          DEP_LOG("stmt " + this + " depends on " + stmt + " because " + str(needed));
           if (this.dependencies.indexOf(stmt) == -1) {
             this.dependencies.push(stmt);
           }
@@ -925,7 +922,7 @@ var Assignment = function(l, op, r, pctx) {
 
   var isAssignment = op === '=';
   if (isAssignment) {
-    console.log("Assigning " + str(l) + " = " + str(r));
+    DEP_LOG("Assigning " + str(l) + " = " + str(r));
     l.assign(r);
   }
 }
@@ -938,12 +935,12 @@ Assignment.prototype.staticValue = function() { return this.right.staticValue();
 function expand_assignment(is_var, l, op, r, pctx, stmts) {
   // turn a single assignment into one or more primitive Assignment statements
   stmts = stmts || [];
-  console.log("expanding assignment " + str(l) + str(op) + str(r));
+  DEP_LOG("expanding assignment " + str(l) + str(op) + str(r));
   var scope = current_scope(pctx);
   var isAssignment = op === '=';
 
   var provide = function(l, r) {
-    console.log("providing: " + str(l));
+    DEP_LOG("providing: " + str(l));
     if (!r) return; // just `var x`, not `var x = <exr>`
     if (l instanceof Id) {
       if (is_var) {
@@ -974,7 +971,7 @@ function expand_assignment(is_var, l, op, r, pctx, stmts) {
         var _r = par[0];
         assert(_r instanceof Id, "Unexpected RHS in destructure pattern: " + _r);
         _r = r.dot(_r.name);
-        console.log("Assigning " + _l + " -> " + _r);
+        DEP_LOG("Assigning " + _l + " -> " + _r);
         provide(_l, _r);
       }
     } else if (l instanceof ArrayLit) {
@@ -989,11 +986,11 @@ function expand_assignment(is_var, l, op, r, pctx, stmts) {
         provide(_l, _r);
       }
     } else {
-      console.log("Don't know how to provide lvalue: " + l);
+      DEP_LOG("Don't know how to provide lvalue: " + l);
     }
   }
   provide(l,r);
-  console.log("compound assignment " + str(stmts));
+  DEP_LOG("compound assignment " + str(stmts));
   return stmts;
 }
 
@@ -1001,7 +998,6 @@ function expand_assignment(is_var, l, op, r, pctx, stmts) {
 var Seq = function(a,b) {
   this.a = a;
   this.b = b;
-  // console.log(" # " + this);
 };
 Seq.prototype = Object.create(Dynamic);
 Seq.prototype.seq = function(other) { return new Seq(this, other); };
@@ -1030,7 +1026,7 @@ Call.prototype.capturePossibleValues = function() {
   if (expr instanceof Ref) expr = assert(expr.dest);
   if (expr instanceof Property) {
     this._possibleSubjects = expr.parent.possibleValues();
-    console.log("captured _possibleSubjects of: " + str(this._possibleSubjects) + " from " + str(expr.parent));
+    DEP_LOG("captured _possibleSubjects of: " + str(this._possibleSubjects) + " from " + str(expr.parent));
     this._possibleArgs = this.args.map(function(arg) { return arg.possibleValues(); });
     this._expr = this.expr;
   }
@@ -1041,35 +1037,35 @@ Call.prototype.possibleValues = nonReentrant([], function() {
   // to the typical use case of concatenating array literals
   var rv = [];
   
-  console.log("determining possible values of some method " + str(this));
-  console.log("expr is " + str(this.expr));
-  console.log("its parent is " + str(this.expr.parent));
+  DEP_LOG("determining possible values of some method " + str(this));
+  DEP_LOG("expr is " + str(this.expr));
+  DEP_LOG("its parent is " + str(this.expr.parent));
   var expr = this._expr;
   if (expr) {
-    console.log("determining possible values of method " + str(this));
+    DEP_LOG("determining possible values of method " + str(this));
     var possibleSubjects = this._possibleSubjects;
-    console.log("possibleSubjects from " + str(expr.parent) + " are: " + str(possibleSubjects));
+    DEP_LOG("possibleSubjects from " + str(expr.parent) + " are: " + str(possibleSubjects));
 
     for (var subji=0;subji<possibleSubjects.length;subji++) {
       var subject = possibleSubjects[subji];
       if (!Array.isArray(subject)) {
-        console.log("Skipping non-array subject: " + str(subject));
+        DEP_LOG("Skipping non-array subject: " + str(subject));
         continue;
       }
       var method = Array.prototype[expr.name];
       if (!method) {
-        console.log("can't statically resolve array method " + expr.name);
+        DEP_LOG("can't statically resolve array method " + expr.name);
         continue;
       }
       // generate a cross-product of all possible values of all arguments
       var argPossibilities = this._possibleArgs;
       if (argPossibilities.length != 1) {
-        console.log("XXX implement multile arguments");
+        DEP_LOG("XXX implement multile arguments");
         continue;
       }
 
       var possibleValues = argPossibilities[0];
-      console.log("argPossibilities = " + str(possibleValues));
+      DEP_LOG("argPossibilities = " + str(possibleValues));
       for (var i=0; i<possibleValues.length; i++) {
         try {
           var copy = subject.slice();
@@ -1078,12 +1074,12 @@ Call.prototype.possibleValues = nonReentrant([], function() {
             rv.push(result);
           }
         } catch(e) {
-          console.log("error statically resolving " + str(this) + ":\n" + e + "\n" + e.stack);
+          DEP_LOG("error statically resolving " + str(this) + ":\n" + e + "\n" + e.stack);
         }
       }
     }
   }
-  console.log("possible value: -> " + str(rv));
+  DEP_LOG("possible value: -> " + str(rv));
   return rv;
 });
 
@@ -1101,7 +1097,7 @@ Call.prototype.flatten = function() {
   var prop = this.prop;
   var static_args = this.staticArgs();
   return tapLog('ARG_FLAT:', prop.staticValue().bind(function(ident) {
-    console.log("IDENT " + ident);
+    DEP_LOG("IDENT " + ident);
     switch(ident) {
       case "require":
         return Just({call: "require", args: static_args});
@@ -1126,7 +1122,7 @@ Call.prototype.toString = function() { return "Call(" + this.expr + "," + this.a
 // A primitive literal
 var Lit = function(val) {
   this.val = val;
-  // console.log(" # " + this);
+  // DEP_LOG(" # " + this);
 };
 Lit.prototype = Object.create(Dynamic);
 Lit.prototype.staticValue = function() { return Just(eval(this.val)); };
@@ -1136,7 +1132,7 @@ Lit.prototype.toString = function() { return "Literal(" + this.staticValue() + "
 // an Array literal
 var ArrayLit = function(arr) {
   this.arr = arr;
-  // console.log(" # " + this);
+  // DEP_LOG(" # " + this);
 };
 ArrayLit.prototype = Object.create(Dynamic);
 ArrayLit.prototype.staticValue = function() {
@@ -1173,8 +1169,8 @@ var ObjectLit = function(spec, pctx) {
       props.push([key, value]);
     }
   }
-  console.log("GEN_OBJ_LIT: " + str(props));
-  // console.log(" # " + this);
+  DEP_LOG("GEN_OBJ_LIT: " + str(props));
+  // DEP_LOG(" # " + this);
 }
 ObjectLit.prototype = Object.create(Dynamic);
 ObjectLit.prototype.staticValue = function() {
@@ -1226,7 +1222,7 @@ function init_toplevel(pctx) {
 };
 
 function push_scope(pctx) {
-  console.log("++ SCOPE");
+  DEP_LOG("++ SCOPE");
   var parent = current_scope(pctx);
   var scope;
   if (pctx.suppress_next_block) { // TODO: use MultipleStatements block instead?
@@ -1246,7 +1242,7 @@ function push_scope(pctx) {
 function pop_scope(pctx) {
   var scope = pctx.scopes.pop();
   scope.convert_unused_identifiers_into_references();
-  console.log("-- SCOPE");
+  DEP_LOG("-- SCOPE");
   return scope;
 }
 
@@ -1255,17 +1251,16 @@ function add_stmt(stmt, pctx) {
   var top = scope.top === scope;
   function _add_stmt(stmt) {
     if (!stmt) {
-      console.warn("NUll stmt: " + stmt);
       return;
     }
 
     if (stmt instanceof MultipleStatements) {
-      console.log("add_stmt expanding MultipleStatements: " + stmt);
+      DEP_LOG("add_stmt expanding MultipleStatements: " + stmt);
       stmt = stmt.stmts;
     }
 
     if(Array.isArray(stmt)) {
-      console.log("Adding " + stmt.length + " statements");
+      DEP_LOG("Adding " + stmt.length + " statements");
       for (var i=0;i<stmt.length;i++) {
         // NOTE: we give the same index to multiple toplevel assignments, because
         // they all come from the same statement (even though we track
@@ -1288,11 +1283,11 @@ function add_stmt(stmt, pctx) {
         }
         seen.push(stmt);
         if (stmt instanceof Assignment) {
-          console.log("Assignment to: " + str(stmt.provides));
+          DEP_LOG("Assignment to: " + str(stmt.provides));
           for (var p = 0; p<stmt.provides.length; p++) {
             var provided = stmt.provides[p];
             var root = provided;
-            console.log("root : " + root);
+            DEP_LOG("root : " + root);
             var prop = null;
             if (root instanceof Property) {
               while(root instanceof Property) {
@@ -1325,12 +1320,12 @@ function add_stmt(stmt, pctx) {
       var added = add_scope_from(stmt, true);
       if (!added) {
         // default to toplevel scope
-        console.log("Non-assignment: " + stmt);
+        DEP_LOG("Non-assignment: " + stmt);
         applyScope(container, null);
       }
 
       stmt = container;
-      console.log("TOPLEVEL STMT: " + stmt);
+      DEP_LOG("TOPLEVEL STMT: " + stmt);
 
       if (stmt.exportScope === undefined) {
         // all toplevel statements have a global exportScope by default
@@ -1542,7 +1537,7 @@ SemanticToken.prototype = {
     this.excf = function(left, pctx) {
       var right = parseExp(pctx, bp);
       
-      console.log("ASSIGN_OP", str(left), this.id, str(right));   return MultipleStatements.wrap(expand_assignment(false, left, this.id, right, pctx));
+      DEP_LOG("ASSIGN_OP", str(left), this.id, str(right));   return MultipleStatements.wrap(expand_assignment(false, left, this.id, right, pctx));
     };
     return this;
   },
@@ -1591,11 +1586,11 @@ Identifier.prototype.exsf = function(pctx) {
   if (this.alternate === true) {
     if (this.value.length) {
       
-      console.log("@NS IDENT"); return current_scope(pctx).get_var("__oni_altns").dot(this.value);
+      DEP_LOG("@NS IDENT"); return current_scope(pctx).get_var("__oni_altns").dot(this.value);
     }
     else {
       
-      console.log("@NS plain"); return current_scope(pctx).get_var("__oni_altns");
+      DEP_LOG("@NS plain"); return current_scope(pctx).get_var("__oni_altns");
     }
   }
   else {
@@ -1722,7 +1717,7 @@ S(".").exc(270, function(l, pctx) {
   var name = pctx.token.value;
   scan(pctx);
   
-  console.log("DOTTING:"+l + "." + name);return l.dot(name);
+  DEP_LOG("DOTTING:"+l + "." + name);return l.dot(name);
 });
 
 S("new").exs(function(pctx) {
@@ -1786,7 +1781,7 @@ S("(").
     }
 
     
-    console.log("CALLING:" + str(l)); return l.call(args);
+    DEP_LOG("CALLING:" + str(l)); return l.call(args);
   });
 
 S("..").exc(255, function(l, pctx) {
@@ -1916,7 +1911,7 @@ function parseBlock(pctx) {
   }
   scan(pctx, "}");
   
-  console.log("END_BLOCK: " + str(current_scope(pctx))); return new Block(pop_scope(pctx));
+  DEP_LOG("END_BLOCK: " + str(current_scope(pctx))); return new Block(pop_scope(pctx));
 }
 
 function parseBlockLambdaBody(pctx) {
@@ -1989,7 +1984,7 @@ S("{").
       throw new Error("Unexpected token '"+pctx.token+"' - was expecting '|' or '||'");
     var args = [parseBlockLambda(start, pctx)];
     
-    console.log("CALLING:" + str(l)); return l.call(args);;
+    DEP_LOG("CALLING:" + str(l)); return l.call(args);;
   }).
   // block:
   stmt(parseBlock);
@@ -2019,7 +2014,7 @@ function parseFunctionBody(pctx, implicit_return) {
   }
   scan(pctx, "}");
   
-  console.log("END_FBODY: " + str(current_scope(pctx))); pop_scope(pctx); return Dynamic;
+  DEP_LOG("END_FBODY: " + str(current_scope(pctx))); pop_scope(pctx); return Dynamic;
 }
 
 function parseFunctionParam(pctx) {
@@ -2071,7 +2066,7 @@ S("function").
     var pars = parseFunctionParams(pctx);
     var body = parseFunctionBody(pctx);
     
-    console.log("FUNBOD: " + str(body)); return body;
+    DEP_LOG("FUNBOD: " + str(body)); return body;
   }).
   // statement function form ('function declaration')
   stmt(function(pctx) {
@@ -2215,7 +2210,7 @@ function parseQuasiInlineEscape(pctx) {
       if (args.length) scan(pctx, ',');
       args.push(parseExp(pctx, 110)); // only parse up to comma
     }
-    console.log("CALLING:" + str(identifier.exsf(pctx))); return identifier.exsf(pctx).call(args);
+    DEP_LOG("CALLING:" + str(identifier.exsf(pctx))); return identifier.exsf(pctx).call(args);
   }
 }
 
@@ -2253,7 +2248,7 @@ S("var").stmt(function(pctx) {
   var decls = parseVarDecls(pctx);
   parseStmtTermination(pctx);
   
-  var stmts=[];                                                            for (var i=0; i<decls.length; ++i) {                                       console.log("GEN_VAR " + str(decls[i][0]));                              current_scope(pctx).add_var(decls[i][0]);                                expand_assignment(true, decls[i][0], '=', decls[i][1], pctx, stmts);   };                                                                       return MultipleStatements.wrap(stmts);
+  var stmts=[];                                                            for (var i=0; i<decls.length; ++i) {                                       DEP_LOG("GEN_VAR " + str(decls[i][0]));                              current_scope(pctx).add_var(decls[i][0]);                                expand_assignment(true, decls[i][0], '=', decls[i][1], pctx, stmts);   };                                                                       return MultipleStatements.wrap(stmts);
 });
 
 S("else");
@@ -2269,7 +2264,7 @@ S("if").stmt(function(pctx) {
     alternative = parseStmt(pctx);
   }
   
-  var stmts = [];                                     if (consequent instanceof Block) {                    stmts = stmts.concat(consequent.scope.stmts);     } else {                                              stmts.push(consequent);                           }                                                   if (alternative instanceof Block) {                   stmts = stmts.concat(alternative.scope.stmts)     } else {                                              stmts.push(alternative);                          }                                                   console.log("GEN_IF:" + str(stmts));           return MultipleStatements.wrap(stmts);
+  var stmts = [];                                     if (consequent instanceof Block) {                    stmts = stmts.concat(consequent.scope.stmts);     } else {                                              stmts.push(consequent);                           }                                                   if (alternative instanceof Block) {                   stmts = stmts.concat(alternative.scope.stmts)     } else {                                              stmts.push(alternative);                          }                                                   DEP_LOG("GEN_IF:" + str(stmts));           return MultipleStatements.wrap(stmts);
 });
 
 S("while").stmt(function(pctx) {
@@ -2561,10 +2556,10 @@ S("using").stmt(function(pctx) {
 
 S("__js").stmt(function(pctx) {
   
-  console.log("START JS BLOCK"); pctx.suppress_next_block = true;
+  DEP_LOG("START JS BLOCK"); pctx.suppress_next_block = true;
   var body = parseStmt(pctx);
   
-  console.log("END_JS");
+  DEP_LOG("END_JS");
   
   return body;
 });
