@@ -275,6 +275,34 @@ context {||
       exports.fun2() .. @assert.eq('fun1+2 result');
     }
 
+    test("__js blocks") {|s|
+      var deps = s.getDeps(['fun2'], '
+        var needed_by_fun1 = "fun1+2 result";
+        var needed_by_fun3 = "fun3 result";
+
+        __js {
+        exports.fun1 = function() {
+          return needed_by_fun1;
+        };
+        }
+
+        exports.fun2 = function() {
+          return exports.fun1();
+        };
+
+        exports.fun3 = function() {
+          return needed_by_fun3;
+        };
+      ');
+
+      var exports = s.getExports(deps);
+
+      deps.lib.exports .. @sort .. @assert.eq(['fun2']);
+      exports .. @ownKeys .. @assert.contains('fun1');
+      exports .. @ownKeys .. @assert.notContains('fun3');
+      exports.fun2() .. @assert.eq('fun1+2 result');
+    }
+
     test("selective dependency on secondary module") {|s|
       var modsrc = '
         var dep_a = require("./dep_a");

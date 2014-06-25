@@ -314,7 +314,7 @@ function findDependencies(sources, settings) {
       }
 
       addRequireAnnotations(null, docs.require);
-      docs.children .. object.ownPropertyPairs .. seq.each {|name, childDocs|
+      docs.children .. object.ownPropertyPairs .. seq.each {|[name, childDocs]|
         addRequireAnnotations(name, childDocs.require);
       }
     }
@@ -867,6 +867,7 @@ var sanitizeOpts = function(opts) {
   // expand ignore / exclude paths
   rv.exclude = (opts.exclude || []) .. map(coerceToURL) .. map(stringToPrefixRe);
   rv.ignore  = (opts.ignore  || []) .. map(coerceToURL) .. concat([/^builtin:/, /\.api$/]) .. map(stringToPrefixRe);
+  rv.ignore.push(/^nodejs:/);
   return rv;
 };
 

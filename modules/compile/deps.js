@@ -582,15 +582,12 @@ var concat = function(arr) {
 // either "./mod1" or "./mod2").
 
 var applyScope = (function() {
-  var inner = function(obj, scope) {
+  return function(obj, scope) {
+    assert(typeof(scope) === 'string' || scope === null, "not a string: " + scope);
     if (!obj.exportScope) obj.exportScope = [];
     // assert(obj.exportScope === undefined, "can't scope " + obj + " to " + scope + " - already scoped to " + obj.exportScope);
     console.log("SCOPE(" + str(scope) + "): " + str(obj));
     obj.exportScope.push(scope);
-  };
-  return function(obj, scope) {
-    assert(typeof(scope) === 'string' || scope === null, "not a string: " + scope);
-    inner.apply(null, arguments);
   };
 })();
 
@@ -623,7 +620,7 @@ function Block(scope) {
 Block.prototype = Object.create(Dynamic);
 Block.prototype.merge = false; // merge with parent block upon completion
 Block.prototype.toString = function() {
-  return "Block{"+str(this.scope.stmts)+"}";
+  return "Block{"+str(this.scope)+"}";
 };
 
 
@@ -773,8 +770,10 @@ Statement.prototype.add_reference = function(ref) {
 Statement.prototype.remove_reference = function(ref) {
   console.log("+UNREF: " + ref);
   var idx = this.references.indexOf(ref);
-  if (idx === -1)
-    throw new Error("Can't find reference: " + ref + " in list: " + str(this.references));
+  if (idx === -1) {
+    console.log("Can't find reference: " + ref + " in list: " + str(this.references));
+    // throw new Error("Can't find reference: " + ref + " in list: " + str(this.references));
+  }
   this.references.splice(idx, 1);
 };
 Statement.prototype.set = function(stmt) {
@@ -933,28 +932,18 @@ Assignment.prototype = Object.create(Dynamic);
 Assignment.prototype.toString = function() {
   return "Assignment(" + str(this.left) + " " + this.op + " " + str(this.right) + ")";
 }
-Assignment.prototype.staticValue = function() { return this.right; };
-Assignment.prototype.scopeTo = function(name) {
-  assert(!this.exportScope, "already scoped: " + str(this));
-  assert(typeof(name) === 'string', "not a string: " + name);
-  this.exportScope = Some(name);
-  this.right.scopeTo(name);
-};
+Assignment.prototype.staticValue = function() { return this.right.staticValue(); };
 
 function expand_assignment(is_var, l, op, r, pctx, stmts) {
   // turn a single assignment into one or more primitive Assignment statements
   stmts = stmts || [];
   console.log("expanding assignment " + str(l) + str(op) + str(r));
-
-  if(l instanceof Ref) {
-    l.deref();
-    l = l.dest;
-  }
   var scope = current_scope(pctx);
   var isAssignment = op === '=';
 
   var provide = function(l, r) {
     console.log("providing: " + str(l));
+    if (!r) return; // just `var x`, not `var x = <exr>`
     if (l instanceof Id) {
       if (is_var) {
         l = current_scope(pctx).add_var(l.name);
@@ -1289,8 +1278,14 @@ function add_stmt(stmt, pctx) {
       container.set(stmt);
       scope.convert_unused_identifiers_into_references();
       pctx.current_stmt = new Statement();
+      var seen = [];
 
-      function add_scope_from(stmt, do_default) {
+      function add_scope_from(stmt) {
+        if (seen.indexOf(stmt) !== -1) {
+          // recursive invocation
+          return;
+        }
+        seen.push(stmt);
         if (stmt instanceof Assignment) {
           console.log("Assignment to: " + str(stmt.provides));
           for (var p = 0; p<stmt.provides.length; p++) {
@@ -2257,7 +2252,7 @@ S("var").stmt(function(pctx) {
   var decls = parseVarDecls(pctx);
   parseStmtTermination(pctx);
   
-  var stmts=[];                                                      for (var i=0; i<decls.length; ++i) {                                 console.log("GEN_VAR " + str(decls[i][0]));                        current_scope(pctx).add_var(decls[i][0], decls[i][1]);             expand_assignment(true, decls[i][0], '=', decls[i][1], pctx, stmts);   };                                                                 return MultipleStatements.wrap(stmts);
+  var stmts=[];                                                            for (var i=0; i<decls.length; ++i) {                                       console.log("GEN_VAR " + str(decls[i][0]));                              current_scope(pctx).add_var(decls[i][0]);                                expand_assignment(true, decls[i][0], '=', decls[i][1], pctx, stmts);   };                                                                       return MultipleStatements.wrap(stmts);
 });
 
 S("else");
