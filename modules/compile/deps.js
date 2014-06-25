@@ -328,6 +328,9 @@ var str = function(obj) {
     }
     return "{" + pairs.join(", ") + "}";
   }
+  if (typeof(obj.toString) !== 'function') {
+    return "[Object object]"; // ugh...
+  }
   return String(obj);
 };
 var assert = function(cond, desc) { if (!cond) throw new Error(desc || "Assertion failed"); return cond };
@@ -855,7 +858,6 @@ Statement.prototype.calculateDirectDependencies = function(toplevel) {
     var stmt = stmts[i];
     if(stmt === this) continue;
     var provides = stmt.stmt.provides;
-    console.log("Checking for dependency on " + str(stmt) + " which provides " + str(provides));
     if (!provides) continue;
 
     for (var p = 0; p<provides.length; p++) {
@@ -889,7 +891,6 @@ Statement.prototype.calculateDirectDependencies = function(toplevel) {
   // module dependencies:
   for (var i = 0; i < this.references.length; i++) {
     var node = this.references[i].dest;
-    console.log("Adding module references from " + this.references[i]);
     this.moduleDependencies = this.moduleDependencies.concat(
         toplevel.determineModuleReferences(node));
   }
