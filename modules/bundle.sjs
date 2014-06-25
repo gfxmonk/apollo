@@ -434,8 +434,10 @@ function findDependencies(sources, settings) {
       var {id, name} = arg;
       var prop = path[0] || null;
 
+      console.log("adding module? " + id + "#" + prop);
       if (name) {
-        if (prop !== name) {
+        if (prop !== null && prop !== name) {
+          console.log("NOPE: we only want " + name);
           // we're not accessing something under this module
           continue;
         }
@@ -445,6 +447,7 @@ function findDependencies(sources, settings) {
         // we also know for sure that no other argument
         // could be the provider of this dependency
         delayedActions = [];
+        console.log("Cancel that, only adding module " + id);
         addModule(loadModule(id, module, name), path.slice(1), module);
         break;
       }

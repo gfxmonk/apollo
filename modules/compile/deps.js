@@ -418,23 +418,32 @@ Scope.prototype.add_var = function(name) {
   console.log("VARIABLE: " + name + " // " + this);
   return ident;
 };
-Scope.prototype.get_var = function(v) {
+Scope.prototype.get_var = function(v, direct) {
   assert(typeof(v) === 'string', "non-string variable: " + v);
   if (v === 'this') {
     // there's a `this` in every scope, but it doesn't affect
     // dependencies
     return this._this_var;
   }
+
+  var variable;
   if (Object.prototype.hasOwnProperty.call(this.variables, v)) {
-    console.log("ref() from get_var");
-    return new Ref(this.variables[v], this.pctx);
+    variable = this.variables[v];
+  } else if (this._parent) {
+    variable = this._parent.get_var(v, true);
+  } else {
+    // console.warn("global variable reference: " + v); // XXX
+    variable = this.add_var(v);
   }
-  if (this._parent) {
-    return this._parent.get_var(v);
+
+  if (direct) {
+    return variable;
   }
-  // console.warn("global variable reference: " + v); // XXX
-  console.log("ref() from falling back to a global var:");
-  return new Ref(this.add_var(v), this.pctx);
+
+  // `direct` means access the variable (for internal use),
+  // but default use gets a reference to the given variable
+  console.log("ref() from get_var");
+  return new Ref(variable, this.pctx);
 };
 
 function ModuleReference(arg, path) {
@@ -679,7 +688,8 @@ Variable.prototype.staticValue = function() {
 Variable.prototype.possibleValues = nonReentrant([], function() {
   // just like staticValues, but produces an
   // array of possible alternatives
-  console.log("getting possible values from Variable");
+  console.log("getting possible values from Variable " + this);
+  console.log("value ASTs = " + str(this.values));
   var possible = this.values.map(function(v) {
     console.log("variable traversal: possible values of " + str(v) + " = " + str(v.possibleValues()));
     return v.possibleValues();
@@ -703,6 +713,9 @@ Variable.prototype.toString = function() { return "Variable[#" + this.scope._id 
 
 var Ref = function(dest, pctx) {
   assert(dest, "Ref created with empty destination!");
+  while(dest instanceof Ref) {
+    dest = dest.dest;
+  }
   this.dest = dest;
   this.pctx = pctx;
   pctx.current_stmt.add_reference(this);
@@ -843,6 +856,7 @@ Statement.prototype.calculateDirectDependencies = function(toplevel) {
     var stmt = stmts[i];
     if(stmt === this) continue;
     var provides = stmt.stmt.provides;
+    console.log("Checking for dependency on " + str(stmt) + " which provides " + str(provides));
     if (!provides) continue;
 
     for (var p = 0; p<provides.length; p++) {
@@ -857,7 +871,7 @@ Statement.prototype.calculateDirectDependencies = function(toplevel) {
       var needed = this.references[r].dest;
       while(true) {
         if (provides.indexOf(needed) !== -1) {
-          // console.log("stmt " + this + " depends on " + stmt);
+          console.log("stmt " + this + " depends on " + stmt + " because " + str(needed));
           if (this.dependencies.indexOf(stmt) == -1) {
             this.dependencies.push(stmt);
           }
@@ -876,7 +890,7 @@ Statement.prototype.calculateDirectDependencies = function(toplevel) {
   // module dependencies:
   for (var i = 0; i < this.references.length; i++) {
     var node = this.references[i].dest;
-    console.log("Adding references from " + this.references[i]);
+    console.log("Adding module references from " + this.references[i]);
     this.moduleDependencies = this.moduleDependencies.concat(
         toplevel.determineModuleReferences(node));
   }
@@ -910,7 +924,10 @@ var Assignment = function(l, op, r, pctx) {
   this.provides = provides;
 
   var isAssignment = op === '=';
-  if (isAssignment) l.assign(r);
+  if (isAssignment) {
+    console.log("Assigning " + str(l) + " = " + str(r));
+    l.assign(r);
+  }
 }
 Assignment.prototype = Object.create(Dynamic);
 Assignment.prototype.toString = function() {
@@ -924,9 +941,10 @@ Assignment.prototype.scopeTo = function(name) {
   this.right.scopeTo(name);
 };
 
-function expand_assignment(l, op, r, pctx, stmts) {
+function expand_assignment(is_var, l, op, r, pctx, stmts) {
   // turn a single assignment into one or more primitive Assignment statements
   stmts = stmts || [];
+  console.log("expanding assignment " + str(l) + str(op) + str(r));
 
   if(l instanceof Ref) {
     l.deref();
@@ -937,16 +955,25 @@ function expand_assignment(l, op, r, pctx, stmts) {
 
   var provide = function(l, r) {
     console.log("providing: " + str(l));
+    if (l instanceof Id) {
+      if (is_var) {
+        l = current_scope(pctx).add_var(l.name);
+      } else {
+        l = current_scope(pctx).get_var(l.name, true /* don't wrap in a reference */);
+      }
+    }
+
     if (r instanceof Ref) {
       // plain assignments don't count as a use - `r` is only used when
       // `l` gets referenced / dotted / called
       r.deref();
       r = r.dest;
     }
-
-    if (l instanceof Id) {
-      l = current_scope(pctx).add_var(l.name);
+    if (l instanceof Ref) {
+      l.deref();
+      l = l.dest;
     }
+
     if (l instanceof Variable || l instanceof Property) {
       stmts.push(new Assignment(l, op, r, pctx));
     } else if (l instanceof ObjectLit) {
@@ -1013,6 +1040,7 @@ Call.prototype.capturePossibleValues = function() {
   if (expr instanceof Ref) expr = assert(expr.dest);
   if (expr instanceof Property) {
     this._possibleSubjects = expr.parent.possibleValues();
+    console.log("captured _possibleSubjects of: " + str(this._possibleSubjects) + " from " + str(expr.parent));
     this._possibleArgs = this.args.map(function(arg) { return arg.possibleValues(); });
     this._expr = this.expr;
   }
@@ -1058,9 +1086,6 @@ Call.prototype.possibleValues = nonReentrant([], function() {
           var result = method.call(copy, possibleValues[i]);
           if (result) {
             rv.push(result);
-          } else {
-            // XXX we could skip this if `copy`.eq(parent), but it does no harm
-            rv.push(copy);
           }
         } catch(e) {
           console.log("error statically resolving " + str(this) + ":\n" + e + "\n" + e.stack);
@@ -1126,6 +1151,7 @@ var ArrayLit = function(arr) {
 ArrayLit.prototype = Object.create(Dynamic);
 ArrayLit.prototype.staticValue = function() {
   var arr = this.arr;
+  if (arr.length == 0) return Just([]);
   var maybeVals = [];
   for (var i=0; i<arr.length; i++) {
     maybeVals[i] = arr[i].staticValue();
@@ -1244,6 +1270,7 @@ function add_stmt(stmt, pctx) {
     }
 
     if (stmt instanceof MultipleStatements) {
+      console.log("add_stmt expanding MultipleStatements: " + stmt);
       stmt = stmt.stmts;
     }
 
@@ -1519,7 +1546,7 @@ SemanticToken.prototype = {
     this.excf = function(left, pctx) {
       var right = parseExp(pctx, bp);
       
-      console.log("ASSIGN_OP", str(left), this.id, str(right));   return MultipleStatements.wrap(expand_assignment(left, this.id, right, pctx));
+      console.log("ASSIGN_OP", str(left), this.id, str(right));   return MultipleStatements.wrap(expand_assignment(false, left, this.id, right, pctx));
     };
     return this;
   },
@@ -2230,7 +2257,7 @@ S("var").stmt(function(pctx) {
   var decls = parseVarDecls(pctx);
   parseStmtTermination(pctx);
   
-  var stmts=[];                                                      for (var i=0; i<decls.length; ++i) {                                 console.log("GEN_VAR " + str(decls[i][0]));                        current_scope(pctx).add_var(decls[i][0], decls[i][1]);             expand_assignment(decls[i][0], '=', decls[i][1], pctx, stmts);   };                                                                 return MultipleStatements.wrap(stmts);
+  var stmts=[];                                                      for (var i=0; i<decls.length; ++i) {                                 console.log("GEN_VAR " + str(decls[i][0]));                        current_scope(pctx).add_var(decls[i][0], decls[i][1]);             expand_assignment(true, decls[i][0], '=', decls[i][1], pctx, stmts);   };                                                                 return MultipleStatements.wrap(stmts);
 });
 
 S("else");
@@ -2246,7 +2273,7 @@ S("if").stmt(function(pctx) {
     alternative = parseStmt(pctx);
   }
   
-  return Dynamic;
+  var stmts = [];                                     if (consequent instanceof Block) {                    stmts = stmts.concat(consequent.scope.stmts);     } else {                                              stmts.push(consequent);                           }                                                   if (alternative instanceof Block) {                   stmts = stmts.concat(alternative.scope.stmts)     } else {                                              stmts.push(alternative);                          }                                                   console.log("GEN_IF:" + str(stmts));           return MultipleStatements.wrap(stmts);
 });
 
 S("while").stmt(function(pctx) {

@@ -224,6 +224,10 @@ context {||
             };
             desc.module = {exports: desc.exports};
 
+            if (id === 'builtin:apollo-sys') {
+              return require(id);
+            }
+
             var argNames = require.extensions['sjs'].module_args;
             var flatArgs = argNames .. @map(k -> desc .. @get(k));
             var moduleBody = modules .. @get(id);
@@ -412,7 +416,7 @@ context {||
           exports.individual2 = "individual 2";
         ');
 
-        s.testStdlib = function(contents, splatter) {
+        s.stdlibDeps = function(contents) {
           @fs.writeFile(@path.join(s.tmp, "std.sjs"), contents);
           var deps = s.getDeps(['run'], '
             var m = require("./std");
@@ -425,16 +429,12 @@ context {||
           ');
 
           deps .. @ownKeys .. @filter(x -> x !== 'all') .. @sort .. @assert.eq(['lib', 'main', 'std', 'sub_full','sub_individual']);
-          deps.sub_full.exports .. @sort .. @assert.eq(
-            splatter ? ['full1','individual'] : ['full1']);
-          deps.sub_individual.exports .. @sort .. @assert.eq(['individual1']);
-          var exports = s.getExports(deps);
-          exports.run() .. @assert.eq(['individual 1', 'full 1']);
+          return deps;
         };
       }
 
       test("static") {|s|
-        s.testStdlib('
+        var deps = s.stdlibDeps('
           /**
             @reexports-dependencies
           */
@@ -444,10 +444,14 @@ context {||
             {id: "./sub_individual", name:"individual"},
           ]);
         ');
+        deps.sub_full.exports .. @sort .. @assert.eq(['full1']);
+        deps.sub_individual.exports .. @sort .. @assert.eq(['individual1']);
+        var exports = s.getExports(deps);
+        exports.run() .. @assert.eq(['individual 1', 'full 1']);
       }
 
       test("dynamic (but deterministic) module sets") {|s|
-        s.testStdlib('
+        var deps = s.stdlibDeps('
           /**
             @reexports-dependencies
           */
@@ -459,7 +463,43 @@ context {||
             {id: "./sub_individual", name:"individual"},
           ]);
           module.exports = require(req);
-        ', true);
+        ');
+        // due to multiple possible values of `req` variable,
+        // we can't tell precisely where `individual` comes from:
+        deps.sub_full.exports .. @sort .. @assert.eq(['full1', 'individual']);
+        
+        deps.sub_individual.exports .. @sort .. @assert.eq(['individual1']);
+        var exports = s.getExports(deps);
+        exports.run() .. @assert.eq(['individual 1', 'full 1']);
+      }
+
+      test("hostenv-specific module sets") {|s|
+        // XXX right now we accumulate _all_ possible values of
+        // `req`. If we add explicit static support for `hostenv` checks
+        // then we'll need to adjust this test accordingly
+        var deps = s.stdlibDeps('
+          /**
+            @reexports-dependencies
+          */
+
+          var req = [];
+          var sys = require("builtin:apollo-sys");
+          if (sys.hostenv === "nodejs") {
+            req = req.concat({id: "./sub_individual", name:"individual"});
+          } else
+            req = req.concat("./sub_full");
+          module.exports = require(req);
+        ');
+
+        // due to multiple possible values of `req` variable,
+        // we can't tell precisely where `individual1` comes from:
+        deps.sub_full.exports .. @sort .. @assert.eq(['full1', 'individual']);
+        
+        deps.sub_individual.exports .. @sort .. @assert.eq(['individual1']);
+        var exports = s.getExports(deps);
+ 
+        // executed on nodejs, so we don't actually import `sub_full` at runtime
+        exports.run() .. @assert.eq(['individual 1', undefined]);
       }
     }
 
