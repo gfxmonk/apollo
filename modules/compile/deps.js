@@ -328,7 +328,7 @@ var str = function(obj) {
     }
     return "{" + pairs.join(", ") + "}";
   }
-  if (typeof(obj.toString) !== 'function') {
+  if (Object.hasOwnProperty.call(obj, 'toString') || typeof(obj.toString) !== 'function') {
     return "[Object object]"; // ugh...
   }
   return String(obj);

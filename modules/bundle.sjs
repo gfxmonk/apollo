@@ -294,6 +294,7 @@ function findDependencies(sources, settings) {
     if(docs.require) {
       function addRequireAnnotations(exportScope, annotations) {
         if (!annotations) return;
+        logging.info("Adding require annotations: ", annotations);
         annotations .. seq.each {|req|
           var [name, paths] = req.split('#') .. seq.map(s -> s.trim());
 

@@ -22,11 +22,6 @@
   @require sjs:sys
   @require sjs:url
   @require sjs:observable
-
-  @reexports-dependencies *
-  @exports-dependency sjs:object object // exports includes object
-  @exports-dependency sjs:object // exports includes all object keys
-  @exports-dependency sjs:object // exports includes all object keys
 */
 
 var hostenv = require('builtin:apollo-sys').hostenv;
@@ -54,6 +49,8 @@ var modules = [
 if (hostenv === 'nodejs') {
   modules = modules.concat([
     'sjs:nodejs/stream',
+    'sjs:nodejs/tempfile',
+    'sjs:nodejs/rimraf',
     {id:'sjs:sys', include: ['argv', 'eval']},
     {id:'nodejs:path', name: 'path'},
     {id:'sjs:nodejs/fs', name: 'fs'},
@@ -145,6 +142,12 @@ module.exports = require(modules);
    - **warn**: (function [sjs:logging::warn])
   
   
+  ### Symbols from the [sjs:nodejs/rimraf](#sjs%3Anodejs%2Frimraf) module:
+  *(when in the nodejs environment)*
+  
+   - **rimraf**: (function [sjs:nodejs/rimraf::rimraf])
+  
+  
   ### Symbols from the [sjs:nodejs/stream](#sjs%3Anodejs%2Fstream) module:
   *(when in the nodejs environment)*
   
@@ -157,6 +160,13 @@ module.exports = require(modules);
    - **readAll**: (function [sjs:nodejs/stream::readAll])
    - **WritableStringStream**: (class [sjs:nodejs/stream::WritableStringStream])
    - **write**: (function [sjs:nodejs/stream::write])
+  
+  
+  ### Symbols from the [sjs:nodejs/tempfile](#sjs%3Anodejs%2Ftempfile) module:
+  *(when in the nodejs environment)*
+  
+   - **TemporaryDir**: (function [sjs:nodejs/tempfile::TemporaryDir])
+   - **TemporaryFile**: (function [sjs:nodejs/tempfile::TemporaryFile])
   
   
   ### Symbols from the [sjs:object](#sjs%3Aobject) module:
@@ -290,8 +300,8 @@ module.exports = require(modules);
   
   ### Symbols from the [sjs:sys](#sjs%3Asys) module:
   
-   - **eval**: (function [sjs:sys::eval])
    - **argv**: (function [sjs:sys::argv])
+   - **eval**: (function [sjs:sys::eval])
   
   
   ### Symbols from the [sjs:xbrowser/dom](#sjs%3Axbrowser%2Fdom) module:
