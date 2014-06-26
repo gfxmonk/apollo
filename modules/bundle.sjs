@@ -288,9 +288,7 @@ function findDependencies(sources, settings) {
       }
     }
 
-    // TODO: is this flag really needed?
-    // This seems safe to apply in the general case
-    if (docs['reexports-dependencies']) {
+    if (docs['re-exports-dependencies']) {
       module.transitive = [];
       // hash of path -> property|null
       metadata.toplevel.stmts .. seq.each {|stmt|

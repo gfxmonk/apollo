@@ -129,7 +129,7 @@ context {||
       });
 
       var contents = bundle.contents(tmpfile);
-      contents .. assert.eq([ 'sjs:sys.sjs' ].concat(fixtureDependencies));
+      contents .. assert.eq([ 'sjs:sys.sjs', 'sjs:url.sjs' ].concat(fixtureDependencies));
     }
 
     test("only root (non-alias) hubs are included in the result") {||
