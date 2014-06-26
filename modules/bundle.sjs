@@ -110,7 +110,16 @@ var stringToPrefixRe = function(s) {
   else return s;
 };
 
-var shouldExcude = function(path, patterns) {
+var wildcardToRe = function(s) {
+  if (str.isString(s)) {
+    var parts = s.split(/\*+/);
+    return new RegExp("^#{parts .. seq.map(regexp.escape) .. seq.join('.*')}$");
+  } else {
+    return s;
+  }
+};
+
+var matchesAnyPattern = function(path, patterns) {
   return patterns .. seq.any(function(pat) {
     if (pat.test(path)) {
       logging.verbose("Excluding: #{path}");
@@ -167,9 +176,6 @@ function findDependencies(sources, settings) {
     var stmts = []; // XXX for debugging only
     var rv = function(index) {
       assert.notEq(index, undefined);
-      //if (indexes[index] === true) {
-      //  console.log('KEEP[' + index + ']: ' + stmts[index]);
-      //}
       return indexes[index] === true;
     };
     rv.add = function(stmt) {
@@ -185,9 +191,9 @@ function findDependencies(sources, settings) {
   var requirements = {};
 
   function loadModule(requireName, parent, prefix) {
-    if (shouldExcude(requireName, excludes)) return;
+    if (requireName .. matchesAnyPattern(excludes)) return;
 
-    logging.verbose("Processing: " + requireName);
+    logging.debug("Processing: " + requireName);
     var module = {
       exports: [],
       stmts: [],
@@ -205,23 +211,23 @@ function findDependencies(sources, settings) {
       requireName = url.normalize(requireName, parent.path);
       logging.debug("normalized to " + requireName);
     }
-    if (shouldExcude(requireName, excludes)) return;
+    if (requireName .. matchesAnyPattern(excludes)) return;
 
 
     // resolve with builtin hubs
     try {
       resolved = require.resolve(requireName);
-      logging.verbose("Resolved: ", resolved);
     } catch (e) {
       throw new Error("Error resolving " + requireName + ":\n" + e);
     }
 
-    if (shouldExcude(requireName, excludes)) return;
+    if (requireName .. matchesAnyPattern(excludes)) return;
 
     if (modules .. object.hasOwn(resolved.path)) {
       logging.debug("(already processed)");
       return modules[resolved.path];
     }
+    logging.verbose("Resolved: ", resolved);
     module.path = resolved.path;
     module.id = getId(resolved.path);
     modules[module.path] = module;
@@ -271,6 +277,12 @@ function findDependencies(sources, settings) {
       logging.verbose("Dropping nodejs module " + module.id);
       return null;
     }
+    if (docs['bundle-exclude'] === 'true') {
+      if(!requireName .. matchesAnyPattern(settings.include)) {
+        logging.info("Skipping @bundle-exclude module #{module.id} (use --include to override)");
+        return null;
+      }
+    }
 
     // TODO: is this flag really needed?
     // This seems safe to apply in the general case
@@ -295,7 +307,7 @@ function findDependencies(sources, settings) {
       var trimAll = a -> a .. seq.map(s -> s.trim());
       function addRequireAnnotations(exportScope, annotations) {
         if (!annotations) return;
-        logging.info("Adding require annotations: ", annotations);
+        logging.verbose("Adding require annotation: ", annotations);
         annotations .. seq.each {|req|
           var [name, paths] = req.split('#') .. trimAll();
           if (paths) paths = paths.split(',') .. trimAll();
@@ -331,7 +343,6 @@ function findDependencies(sources, settings) {
   }
 
   function addModuleAnnotations(mod, property) {
-    console.log("Adding module annotations[#{property}] from ", mod.requireAnnotations);
     mod.requireAnnotations .. seq.each { |[exportScope, annotations]|
       if (exportScope === null || exportScope === property) {
         annotations .. seq.each {| [name, path]|
@@ -350,25 +361,26 @@ function findDependencies(sources, settings) {
       throw new Error("invalid `path`: " + JSON.stringify(path));
     }
     if (!settings.strip) path = [];
-    if (parent) {
-      logging.verbose("Adding dependency on #{module.id}##{path} from #{parent.id}");
-    } else {
-      logging.debug("Adding dependency on #{module.id} (toplevel)");
-      path = [];
-    }
-
+    if (!parent) path = [];
     var property = path.length == 0 ? null : path[0];
 
     module.required = true;
     if (property === false) {
       // don't do anything more than including the empty module
-      logging.debug("including empty module: ", module.id);
+      logging.verbose("including empty module: ", module.id);
       return;
     }
     if (module.exports .. seq.hasElem(property)) {
       // already processed
       return;
     }
+
+    if (parent) {
+      logging.verbose("Adding dependency on #{module.id}##{path} from #{parent.id}");
+    } else {
+      logging.debug("Adding dependency on #{module.id} (toplevel)");
+    }
+
 
     module.exports.push(property);
     addModuleAnnotations(module, property);
@@ -644,7 +656,7 @@ function generateBundle(deps, settings) {
     }
 
     var addPath = function(path) {
-      if (shouldExcude(path, excludes)) return;
+      if (path .. matchesAnyPattern(excludes)) return;
       logging.debug("Adding path #{path}");
       var dep = deps.modules[path];
       var id = dep.id;
@@ -859,9 +871,9 @@ var sanitizeOpts = function(opts) {
   rv.hubs =      opts.hubs      .. toPairs(s -> s .. split('=', 1), 'hubs')  .. map([prefix, path] -> [prefix, coerceToURL(path)]);
 
   // expand ignore / exclude paths
-  rv.exclude = (opts.exclude || []) .. map(coerceToURL) .. map(stringToPrefixRe);
-  rv.ignore  = (opts.ignore  || []) .. map(coerceToURL) .. concat([/^builtin:/, /\.api$/]) .. map(stringToPrefixRe);
-  rv.ignore.push(/^nodejs:/);
+  rv.exclude = (opts.exclude || []) .. map(coerceToURL) .. map(wildcardToRe);
+  rv.ignore  = (opts.ignore  || []) .. map(coerceToURL) .. concat([/^builtin:/, /\.api$/, /^nodejs:/]) .. map(wildcardToRe);
+  rv.include = (opts.include || []) .. map(coerceToURL) .. map(wildcardToRe);
   return rv;
 };
 
@@ -977,14 +989,20 @@ if (require.main === module) {
       {
         name: 'ignore',
         type: 'arrayOfString',
-        helpArg : 'BASE',
-        help: "ignore all modules under BASE",
+        helpArg : 'GLOB',
+        help: "ignore all modules matching GLOB",
       },
       {
         name: 'exclude',
         type: 'arrayOfString',
-        helpArg : 'BASE',
-        help: "exclude modules under BASE from bundle output (they are still parsed for dependencies, but omitted from the bundle. Use --ignore to skip modules entirely)",
+        helpArg : 'GLOB',
+        help: "exclude modules matching GLOB from bundle output (they are still parsed for dependencies, but omitted from the bundle. Use --ignore to skip modules entirely)",
+      },
+      {
+        name: 'include',
+        type: 'arrayOfString',
+        helpArg : 'GLOB',
+        help: "include modules that are excluded by default (using the @bundle-exclude annotation)",
       },
     ]
   });

@@ -34,6 +34,7 @@
   @summary   DOM polyfills for non-conformant browsers (IE8, IE9)
   @home      sjs:xbrowser/dom-shim
   @hostenv   xbrowser
+  @bundle-exclude
   @desc
      * Will automatically be loaded by [./dom::] module if required
 
