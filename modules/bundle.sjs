@@ -394,7 +394,7 @@ function findDependencies(sources, settings) {
     if (property) {
       module.stmts .. seq.each {|stmt|
         if (stmt.exportScope .. seq.hasElem(null) || stmt.exportScope .. seq.hasElem("exports.#{property}")) {
-          logging.debug("adding statement with scopes: ", stmt.exportScope);
+          logging.debug("adding statement with scopes: ", stmt.exportScope, String(stmt));
           addStatement(module, stmt);
         }
       }

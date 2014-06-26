@@ -184,11 +184,8 @@ function tapLog(desc, val) {
 }
 
 var process_script = function(pctx) {
-  var scope = current_scope(pctx);
-  var stmts = seq(scope.stmts);
   return {
-    requires: stmts.flatten(),
-    toplevel: scope,
+    toplevel: current_scope(pctx),
   };
 }
 
@@ -236,47 +233,6 @@ var map = function(arr, fn) {
   }
   return res;
 }
-var mapM = function(arr, fn) {
-  // [Maybe a] -> (a -> b) -> [Maybe b]
-  var res = [];
-  for (var i=0; i<arr.length; i++) {
-    res[i] = arr[i].map(fn);
-  }
-  return res;
-}
-
-var flattenM = function(arr) {
-  // [Maybe a] -> Maybe [a]
-  var ret = [];
-  for (var i=0; i<arr.length; i++) {
-    if (!(arr[i].defined())) { return Nothing(); }
-    ret[i] = arr[i].get();
-  }
-  return Just(ret);
-}
-
-var filterM = function(arr) {
-  // [Maybe a] -> [a]
-  var ret = [];
-  for (var i=0; i<arr.length; i++) {
-    if (arr[i] instanceof Nothing) continue;
-    ret[i] = arr[i].get();
-  }
-  return ret;
-}
-
-var flattenAnyM = function(arr) {
-  // [Maybe a] -> Maybe [a|undefined]
-  var any = false;
-  var ret = [];
-  for (var i=0; i<arr.length; i++) {
-    if (!any && arr[i].defined()) {
-      any = true;
-    }
-    ret[i] = arr[i].get(undefined);
-  }
-  return any ? Just(ret) : Nothing();
-};
 
 var expandPossibleValues = function(arr) {
   // Used to convert an arry of possibleValues() results
@@ -368,8 +324,6 @@ var Dynamic = {
   possibleValues: function() {          // default to just this.staticValue()
     return this.staticValue().map(function(val) { return [val]; }).get([]);
   },
-  // text: Nothing,                        // source code representation
-  flatten: function() { return []; },   // Return all non-dynamic children
   toString: function() { return "Dynamic()"; },
 };
 
@@ -428,7 +382,7 @@ Id.prototype.use = function() {
 };
 
 // delegate `dot`, `assign`, etc to underlying variable
-;['dot','assign', 'call', 'possibleValues','staticValue'].forEach(function(method) {
+;['dot','assign', 'call', 'possibleValues'].forEach(function(method) {
   Id.prototype[method] = function() {
     this.use();
     var variable = this.scope.get_var(this.name);
@@ -445,14 +399,8 @@ var Variable = function(text, scope) {
   this.provides = [this];
 };
 Variable.prototype = Object.create(Dynamic);
-Variable.prototype.staticValue = function() {
-  DEP_LOG("TODO: Variable.staticValue" + str(this));
-  return Nothing();
-};
 
 Variable.prototype.possibleValues = nonReentrant([], function() {
-  // just like staticValues, but produces an
-  // array of possible alternatives
   DEP_LOG("getting possible values from Variable " + this);
   DEP_LOG("value ASTs = " + str(this.values));
   var possible = this.values.map(function(v) {
@@ -490,10 +438,6 @@ Ref.prototype.call = function(args) {
   DEP_LOG("REF from call: " + str(this.dest));
   var call = this.dest.call(args, this.pctx);
   return new Ref(call, this.pctx);
-};
-
-Ref.prototype.staticValue = function() {
-  return this.dest.staticValue();
 };
 
 Ref.prototype.possibleValues = function() {
@@ -701,7 +645,6 @@ Assignment.prototype = Object.create(Dynamic);
 Assignment.prototype.toString = function() {
   return "Assignment(" + str(this.left) + " " + this.op + " " + str(this.right) + ")";
 }
-Assignment.prototype.staticValue = function() { return this.right.staticValue(); };
 
 function expand_assignment(is_var, l, op, r, pctx, stmts) {
   // turn a single assignment into one or more primitive Assignment statements
@@ -775,7 +718,6 @@ Seq.prototype.seq = function(other) { return new Seq(this, other); };
 
 /* calls apply to the second object in a seq */
 Seq.prototype.call = function() { return new Seq(this.a, this.b.call.apply(this.b, arguments)); };
-Seq.prototype.flatten = function() { return this.a.flatten().concat(this.b.flatten()); };
 Seq.prototype.toString = function() { return "Seq(" + this.a + "," + this.b + ")"; };
 
 // A function call
@@ -849,42 +791,6 @@ Call.prototype.possibleValues = nonReentrant([], function() {
   return rv;
 });
 
-Call.prototype.staticArgs = function() {
-  // returns Maybe [staticValue]
-  var args = this.args;
-  var static_args = [];
-  for (var i=0; i<args.length; i++) {
-    static_args[i] = args[i].staticValue();
-  }
-  return flattenAnyM(static_args);
-};
-
-Call.prototype.flatten = function() {
-  var prop = this.prop;
-  var static_args = this.staticArgs();
-  return tapLog('ARG_FLAT:', prop.staticValue().bind(function(ident) {
-    DEP_LOG("IDENT " + ident);
-    switch(ident) {
-      case "require":
-        return Just({call: "require", args: static_args});
-        break;
-      case "require.hubs.unshift":
-        return Just({call:"hub_insert", args: static_args});
-        break;
-      case "require.hubs.push":
-        return Just({call:"hub_append", args: static_args});
-        break;
-      default: return Nothing();
-    }
-  }).getLazy(function() {
-    // this isn't a require call, but our args will
-    // always be evaluated, and they might contain
-    // require()s
-    return seq(static_args).flatten();
-  }));
-};
-Call.prototype.toString = function() { return "Call(" + this.expr + "," + this.args + ")"; };
-
 // A primitive literal
 var Lit = function(val) {
   this.val = val;
@@ -901,15 +807,6 @@ var ArrayLit = function(arr) {
   // DEP_LOG(" # " + this);
 };
 ArrayLit.prototype = Object.create(Dynamic);
-ArrayLit.prototype.staticValue = function() {
-  var arr = this.arr;
-  if (arr.length == 0) return Just([]);
-  var maybeVals = [];
-  for (var i=0; i<arr.length; i++) {
-    maybeVals[i] = arr[i].staticValue();
-  }
-  return flattenAnyM(maybeVals);
-};
 
 ArrayLit.prototype.possibleValues = function() {
   if (this.arr.length == 0) return [[]];
@@ -949,24 +846,6 @@ var ObjectLit = function(spec, pctx) {
   // DEP_LOG(" # " + this);
 }
 ObjectLit.prototype = Object.create(Dynamic);
-ObjectLit.prototype.staticValue = function() {
-  var props = this.props;
-  var obj = {};
-  for (var i=0; i<props.length; i++) {
-    var elem = props[i];
-    var key = elem[0];
-    if (key instanceof Id) {
-      key = key.name;
-    } else {
-      continue;
-    }
-    elem[1].staticValue().map(function(v) {
-      obj[key] = v;
-    });
-  }
-  return Just(obj);
-};
-
 ObjectLit.prototype.possibleValues = function() {
   var props = this.props;
   var rv = [];

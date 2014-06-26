@@ -300,20 +300,20 @@ exports.rstrip = function(s, ch){
         rsplit("one=two=three", "=", 1)
         // ['one=two', 'three']
 */
-(function() {
+;[exports.split, exports.rsplit] = (function() {
   // when first required, we check the runtime for correctness with regexp splits. If it's
   // incorrect, we fallback to our own implementation
   var _checked = false, _goodImpl;
   function goodImpl() {
     if (!_checked) {
       _goodImpl = 'ax'.split(/()|(x)/).length === 4;
-      exports.split.useNative = _goodImpl;
+      split.useNative = _goodImpl;
       _checked = true;
     }
     return _goodImpl;
   };
 
-  exports.split = function(s, sep, limit) {
+  var split = function(s, sep, limit) {
     var split;
     if (sep .. isRegExp) {
       if (limit === undefined && goodImpl()) {
@@ -334,7 +334,7 @@ exports.rstrip = function(s, ch){
     return split;
   };
 
-  exports.rsplit = function(s, sep, limit) {
+  var rsplit = function(s, sep, limit) {
     var split;
     if (sep .. isRegExp) {
       if (limit === undefined && goodImpl()) {
@@ -356,6 +356,7 @@ exports.rstrip = function(s, ch){
     return split;
   }
 
+  return [split, rsplit];
 })();
 
 /**
@@ -542,43 +543,43 @@ exports.utf8ToUtf16 = function(s) {
 var keyStr = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
 
 __js {
-
-if (global.btoa) {
-  exports.octetsToBase64 = s -> global.btoa(s);
-}
-else {
-  // fallback for IE9 and below
-  exports.octetsToBase64 = function(s) {
-    var rv = "";
-    var i = 0, l = s.length;
-    while (i<l) {
-      var c1 = s.charCodeAt(i++);
-      var c2 = s.charCodeAt(i++);
-      var c3 = s.charCodeAt(i++);
-      
-      var e1,e2,e3,e4;
-      var e1 = c1 >> 2;
-      if (isNaN(c2)) {
-        e2 = (c1 & 3) << 4;
-        e3 = e4 = 64;
-      }
-      else {
-        e2 = ((c1 & 3) << 4)  | (c2 >> 4);
-        if (isNaN(c3)) {
-          e3 = (c2 & 15) << 2;
-          e4 = 64;
+exports.octetsToBase64 = function() {
+  if (global.btoa) {
+    return global.btoa;
+  }
+  else {
+    // fallback for IE9 and below
+    return function(s) {
+      var rv = "";
+      var i = 0, l = s.length;
+      while (i<l) {
+        var c1 = s.charCodeAt(i++);
+        var c2 = s.charCodeAt(i++);
+        var c3 = s.charCodeAt(i++);
+        
+        var e1,e2,e3,e4;
+        var e1 = c1 >> 2;
+        if (isNaN(c2)) {
+          e2 = (c1 & 3) << 4;
+          e3 = e4 = 64;
         }
         else {
-          e3 = ((c2 & 15) << 2) | (c3 >> 6);
-          e4 = c3 & 63;
+          e2 = ((c1 & 3) << 4)  | (c2 >> 4);
+          if (isNaN(c3)) {
+            e3 = (c2 & 15) << 2;
+            e4 = 64;
+          }
+          else {
+            e3 = ((c2 & 15) << 2) | (c3 >> 6);
+            e4 = c3 & 63;
+          }
         }
+        rv += keyStr.charAt(e1) + keyStr.charAt(e2) + keyStr.charAt(e3) + keyStr.charAt(e4);
       }
-      rv += keyStr.charAt(e1) + keyStr.charAt(e2) + keyStr.charAt(e3) + keyStr.charAt(e4);
-    }
-    return rv;
-  };  
-}
-
+      return rv;
+    };
+  }
+}();
 } // __js
 
 /**
@@ -599,34 +600,36 @@ else {
 */
 __js {
 var atob_ignore = /[^A-Za-z0-9\+\/\=]/g;
-if (global.atob) {
-  exports.base64ToOctets = s -> global.atob(s.replace(atob_ignore, ""));
-}
-else {
-  // fallback for IE9 and below
-  exports.base64ToOctets = function(s) {
-    var rv = "";
-    s = s.replace(atob_ignore, "");
-    var i=0, l=s.length;
-    
-    while (i<l) {
-      var e1,e2,e3,e4;
-      e1 = keyStr.indexOf(s.charAt(i++));
-      e2 = keyStr.indexOf(s.charAt(i++));
-      e3 = keyStr.indexOf(s.charAt(i++));
-      e4 = keyStr.indexOf(s.charAt(i++));
+exports.base64ToOctets = function() {
+  if (global.atob) {
+    return s -> global.atob(s.replace(atob_ignore, ""));
+  }
+  else {
+    // fallback for IE9 and below
+    return function(s) {
+      var rv = "";
+      s = s.replace(atob_ignore, "");
+      var i=0, l=s.length;
       
-      rv += String.fromCharCode((e1 << 2) | (e2 >> 4));
-      if (e3 != 64) {
-        rv += String.fromCharCode(((e2 & 15) << 4) | (e3 >> 2));
-        if (e4 != 64)
-          rv += String.fromCharCode(((e3 & 3) << 6) | e4);
+      while (i<l) {
+        var e1,e2,e3,e4;
+        e1 = keyStr.indexOf(s.charAt(i++));
+        e2 = keyStr.indexOf(s.charAt(i++));
+        e3 = keyStr.indexOf(s.charAt(i++));
+        e4 = keyStr.indexOf(s.charAt(i++));
+        
+        rv += String.fromCharCode((e1 << 2) | (e2 >> 4));
+        if (e3 != 64) {
+          rv += String.fromCharCode(((e2 & 15) << 4) | (e3 >> 2));
+          if (e4 != 64)
+            rv += String.fromCharCode(((e3 & 3) << 6) | e4);
+        }
       }
-    }
-    return rv;
-  };
-}
-} // __js 
+      return rv;
+    };
+  }
+}()
+} // __js
 
 /**
   @function base64ToArrayBuffer
@@ -669,7 +672,8 @@ __js exports.octetsToArrayBuffer = function(s, buffer, offset) {
    @param {optional Integer} [length] Byte length
    @rturn {String} Octet string (upper half of each 'character' set to 0)
 */
-__js (function() {
+__js {
+exports.arrayBufferToOctets = function() {
   var workaround = false;
   var fn = function(src, offset, length) {
     var view;
@@ -694,5 +698,6 @@ __js (function() {
   } catch(e) {
     workaround = true;
   }
-  exports.arrayBufferToOctets = fn;
-})();
+  return fn;
+}();
+} // __js
