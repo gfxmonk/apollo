@@ -479,7 +479,7 @@ context {||
       test("static") {|s|
         var deps = s.stdlibDeps('
           /**
-            @reexports-dependencies
+            @re-exports-dependencies
           */
 
           module.exports = require([
@@ -496,7 +496,7 @@ context {||
       test("dynamic (but deterministic) module sets") {|s|
         var deps = s.stdlibDeps('
           /**
-            @reexports-dependencies
+            @re-exports-dependencies
           */
 
           var req = [
@@ -522,7 +522,7 @@ context {||
         // then we'll need to adjust this test accordingly
         var deps = s.stdlibDeps('
           /**
-            @reexports-dependencies
+            @re-exports-dependencies
           */
 
           var req = [];

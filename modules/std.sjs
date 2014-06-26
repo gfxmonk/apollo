@@ -6,22 +6,7 @@
 *   (edit src/build/std.sjs instead)   *
 * ------------------------------------ */
 /**
-  // metadata for sjs:bundle:
-  @require sjs:object
-  @require sjs:array
-  @require sjs:sequence
-  @require sjs:compare
-  @require sjs:debug
-  @require sjs:function
-  @require sjs:cutil
-  @require sjs:quasi
-  @require sjs:assert
-  @require sjs:logging
-  @require sjs:string
-  @require sjs:event
-  @require sjs:sys
-  @require sjs:url
-  @require sjs:observable
+  @re-exports-dependencies
 */
 
 var hostenv = require('builtin:apollo-sys').hostenv;

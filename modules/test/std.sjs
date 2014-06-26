@@ -1,7 +1,6 @@
 /**
- @require ./suite
- @require ../std
  @summary Standard test utilities
+ @re-exports-dependencies
  @desc
    This module exports all symbols from the following modules:
     - [./suite::]
