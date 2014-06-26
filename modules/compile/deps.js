@@ -1121,8 +1121,6 @@ Call.prototype.possibleValues = nonReentrant([], function() {
       }
 
 
-      // generate a cross-product of all possible values of all arguments
-      //
       var argPossibilities = expandPossibleValues(this._possibleArgs);
       DEP_LOG("argPossibilities = " + str(argPossibilities));
       for (var i=0; i<argPossibilities.length; i++) {
@@ -1205,6 +1203,7 @@ ArrayLit.prototype.staticValue = function() {
 };
 
 ArrayLit.prototype.possibleValues = function() {
+  if (this.arr.length == 0) return [[]];
   return expandPossibleValues(
     this.arr.map(function(val){
       return val.possibleValues();

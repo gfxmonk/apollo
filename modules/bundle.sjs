@@ -227,7 +227,7 @@ function findDependencies(sources, settings) {
       logging.debug("(already processed)");
       module = modules[resolved.path];
       if (module.ignore) return null;
-      return null;
+      return module;
     }
     logging.verbose("Resolved: ", resolved);
     module.path = resolved.path;
@@ -524,8 +524,8 @@ function findDependencies(sources, settings) {
       addModule(dep, path, module);
     }
 
-    if (!isFound && prop) {
-      logging.debug("Couldn't determine which module provides #{prop}");
+    if (!isFound && prop && potentialDeps.length > 1) {
+      logging.debug("Couldn't determine which module provides #{prop}, from candidates:", args);
     }
 
     potentialDeps .. seq.each {|[dep, path]|
@@ -579,6 +579,7 @@ function findDependencies(sources, settings) {
     var stmts = mod.stmts;
     delete mod.stmts;
     delete mod.requireAnnotations;
+    delete mod.transitive;
 
     if (!settings.strip) continue;
 
