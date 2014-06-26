@@ -362,6 +362,7 @@ var nonReentrant = function(default_value, fn) {
 
 var _scope_ctr = 1;
 function Scope(parent, pctx) {
+  this.scope = this;
   this._id = _scope_ctr++;
   this._parent = parent;
   this.variables = {};
@@ -616,15 +617,25 @@ var Dynamic = {
   toString: function() { return "Dynamic()"; },
 };
 
-function Block(scope) {
-  this.scope = scope;
-};
-Block.prototype = Object.create(Dynamic);
-Block.prototype.merge = false; // merge with parent block upon completion
-Block.prototype.toString = function() {
+var BlockProto = Object.create(Dynamic);
+BlockProto.toString = function() {
   return "Block{"+str(this.scope)+"}";
 };
-
+function Block(scope) {
+  var rv = Object.create(BlockProto);
+  rv.stmts = [];
+  rv.scope = scope;
+  // inherit everything (non-writable) from scope
+  // TODO: when we've established that nothing actually
+  // writes to scope, turn this into a simple inherit
+  for (var k in scope) {
+    if (k in rv) continue;
+    var val = scope[k];
+    if (typeof(val) === 'function') val = val.bind(scope);
+    Object.defineProperty(rv, k, {value:val, writable:false});
+  }
+  return rv;
+};
 
 var Property = function(parent, text, pctx) {
   this.parent = parent;
@@ -1221,19 +1232,15 @@ function init_toplevel(pctx) {
   pctx.stmt_index = 0;
 };
 
-function push_scope(pctx) {
+function push_scope(pctx, new_scope) {
   DEP_LOG("++ SCOPE");
-  var parent = current_scope(pctx);
+  var parent = current_scope(pctx).scope;
   var scope;
-  if (pctx.suppress_next_block) { // TODO: use MultipleStatements block instead?
-    // hack: duplicate current scope so that
-    // it's effectively merged, and
-    // pop_scope doesn't freak out
-    delete pctx.suppress_next_block;
-    scope = parent;
-  } else {
+  if (new_scope) { // TODO: use MultipleStatements block instead?
     scope = new Scope(parent, pctx);
     scope.top = pctx.scopes[0];
+  } else {
+    scope = Block(parent);
   }
   pctx.scopes.push(scope);
   return scope;
@@ -1254,7 +1261,7 @@ function add_stmt(stmt, pctx) {
       return;
     }
 
-    if (stmt instanceof MultipleStatements) {
+    if (stmt instanceof MultipleStatements || stmt instanceof Block) {
       DEP_LOG("add_stmt expanding MultipleStatements: " + stmt);
       stmt = stmt.stmts;
     }
@@ -1903,7 +1910,7 @@ function parsePropertyName(token, pctx) {
 
 function parseBlock(pctx) {
   
-  push_scope(pctx);
+  push_scope(pctx, false);
   while (pctx.token.id != "}") {
     var stmt = parseStmt(pctx);
     
@@ -1911,20 +1918,20 @@ function parseBlock(pctx) {
   }
   scan(pctx, "}");
   
-  DEP_LOG("END_BLOCK: " + str(current_scope(pctx))); return new Block(pop_scope(pctx));
+  DEP_LOG("END_BLOCK: " + str(current_scope(pctx))); return pop_scope(pctx);
 }
 
 function parseBlockLambdaBody(pctx) {
   
-  /* */
+  push_scope(pctx, true);
   while (pctx.token.id != "}") {
     var stmt = parseStmt(pctx);
     
-    /* */;
+    add_stmt(stmt, pctx);;
   }
   scan(pctx, "}");
   
-  return Dynamic;
+  pop_scope(pctx); return Dynamic;
 }
 function parseBlockLambda(start, pctx) {
   // collect parameters
@@ -2005,7 +2012,7 @@ S("<eof>").
 // helper to parse a function body:
 function parseFunctionBody(pctx, implicit_return) {
   
-  push_scope(pctx);
+  push_scope(pctx, true);
   scan(pctx, "{");
   while (pctx.token.id != "}") {
     var stmt = parseStmt(pctx);
@@ -2556,7 +2563,7 @@ S("using").stmt(function(pctx) {
 
 S("__js").stmt(function(pctx) {
   
-  DEP_LOG("START JS BLOCK"); pctx.suppress_next_block = true;
+  DEP_LOG("START JS BLOCK");
   var body = parseStmt(pctx);
   
   DEP_LOG("END_JS");
