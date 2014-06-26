@@ -304,7 +304,6 @@ function findDependencies(sources, settings) {
           }
         }
       }
-      logging.warn("Transitively got refs: " + module.transitive);
     }
 
     if(docs.require) {
