@@ -3,5 +3,5 @@
   @require ./annotated_child2
  */
 var dyn = './dynamic_dependency';
-@ = require(['./merge_child1', {id: './merge_child2', exclude: 'map'}, dyn, {id:dyn}]);
-
+var mods = require(['./merge_child1', {id: './merge_child2', exclude: 'map'}, dyn, {id:dyn}]);
+mods;

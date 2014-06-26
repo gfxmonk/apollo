@@ -68,6 +68,7 @@ context {||
     '/fixtures/annotated_child2.sjs',
     '/fixtures/bundle_parent.sjs',
     '/fixtures/child1.sjs',
+    '/fixtures/dynamic_dependency.sjs',
     '/fixtures/merge_child1.sjs',
     '/fixtures/merge_child2.sjs',
   ];
@@ -84,7 +85,20 @@ context {||
     });
 
     bundle .. bundledModuleNames .. assert.eq([
-      [ 'sjs:', ['array.sjs', 'cutil.sjs', 'object.sjs','sequence.sjs', 'string.sjs', 'xbrowser/console.sjs']],
+      [ 'sjs:', [
+        'array.sjs',
+        'cutil.sjs',
+        'debug.sjs',
+        'event.sjs',
+        'logging.sjs',
+        'object.sjs',
+        'quasi.sjs',
+        'regexp.sjs',
+        'sequence.sjs',
+        'string.sjs',
+        'xbrowser/console.sjs',
+        'xbrowser/dom.sjs',
+        ]],
       [ null, fixtureDependencyUrls]
     ]);
   }

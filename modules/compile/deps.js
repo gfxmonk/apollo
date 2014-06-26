@@ -569,6 +569,53 @@ var flattenAnyM = function(arr) {
   return any ? Just(ret) : Nothing();
 };
 
+var expandPossibleValues = function(arr) {
+  // Used to convert an arry of possibleValues() results
+  // into a singl combined PossibleValues result for the
+  // entire array / argument list.
+  //
+  // e.g: permutations([["a","b"],["c","d"]])
+  // -> [["a","c"], ["a","d"], ["b","c"], ["b","d"]]
+  //
+  // ** NOTE**: We treat empty possibleValues as if they
+  // were a single [undefined] possibility, because
+  // otherwise we'd ignore entire calls due to a single
+  // dynamic element
+  //
+  // e.g: permutations([["a","b"],[]])
+  // -> [["a",undefined], ["b",undefined]]
+  //
+  // As a special case, when _every_ element of `arr`
+  // is empty, the entire return value is just []
+
+  var set =[];
+  var any = false;
+  arr = arr.map(function(elem) {
+    assert(Array.isArray(elem));
+    if (elem.length == 0) return [undefined];
+    any = true;
+    return elem;
+  });
+  if (!any) return [];
+
+  function inner(arr, prefix) {
+    if (arr.length == 0) {
+      set.push(prefix);
+    } else {
+      var rest = arr.slice(1);
+      var head = arr[0];
+      for (var i=0; i<head.length; i++) {
+        inner(rest, prefix.concat([head[i]]));
+      }
+    }
+  }
+  inner(arr, []);
+  return set;
+};
+
+// console.log(combinations([["a","b","c"],["d","e"],[]]));
+// process.exit(1);
+
 var concat = function(arr) {
   var rv = [];
   for (var i=0; i<arr.length; i++) {
@@ -799,6 +846,7 @@ Statement.prototype.calculateDependencies = function(toplevel) {
 };
 
 function determineModuleReferences(node, path) {
+  DEP_LOG("determining module references from node " + str(node));
   var seen = [];
   var inner = function(node, path) {
     if (seen.indexOf(node) !== -1) {
@@ -822,6 +870,9 @@ function determineModuleReferences(node, path) {
         node = node.parent;
       } else if (node instanceof Call) {
         DEP_LOG("Checking call of: " + node.expr);
+        if (node.expr === this.require) {
+          DEP_LOG("a require call! args = " + str(node.args));
+        }
         if (node.expr === this.require && node.args.length > 0) {
           var arg = node.args[0];
           var alternatives = arg.possibleValues();
@@ -880,7 +931,7 @@ Statement.prototype.calculateDirectDependencies = function(toplevel) {
       var needed = this.references[r].dest;
       while(true) {
         if (provides.indexOf(needed) !== -1) {
-          DEP_LOG("stmt " + this + " depends on " + stmt + " because " + str(needed));
+          // DEP_LOG("stmt " + this + " depends on " + stmt + " because " + str(needed));
           if (this.dependencies.indexOf(stmt) == -1) {
             this.dependencies.push(stmt);
           }
@@ -1038,7 +1089,7 @@ Call.prototype.capturePossibleValues = function() {
   if (expr instanceof Property) {
     this._possibleSubjects = expr.parent.possibleValues();
     DEP_LOG("captured _possibleSubjects of: " + str(this._possibleSubjects) + " from " + str(expr.parent));
-    this._possibleArgs = this.args.map(function(arg) { return arg.possibleValues(); });
+    this._possibleArgs = this.args.slice(0,1).map(function(arg) { return arg.possibleValues(); });
     this._expr = this.expr;
   }
 };
@@ -1068,19 +1119,16 @@ Call.prototype.possibleValues = nonReentrant([], function() {
         DEP_LOG("can't statically resolve array method " + expr.name);
         continue;
       }
-      // generate a cross-product of all possible values of all arguments
-      var argPossibilities = this._possibleArgs;
-      if (argPossibilities.length != 1) {
-        DEP_LOG("XXX implement multile arguments");
-        continue;
-      }
 
-      var possibleValues = argPossibilities[0];
-      DEP_LOG("argPossibilities = " + str(possibleValues));
-      for (var i=0; i<possibleValues.length; i++) {
+
+      // generate a cross-product of all possible values of all arguments
+      //
+      var argPossibilities = expandPossibleValues(this._possibleArgs);
+      DEP_LOG("argPossibilities = " + str(argPossibilities));
+      for (var i=0; i<argPossibilities.length; i++) {
         try {
           var copy = subject.slice();
-          var result = method.call(copy, possibleValues[i]);
+          var result = method.apply(copy, argPossibilities[i]);
           if (result) {
             rv.push(result);
           }
@@ -1155,6 +1203,15 @@ ArrayLit.prototype.staticValue = function() {
   }
   return flattenAnyM(maybeVals);
 };
+
+ArrayLit.prototype.possibleValues = function() {
+  return expandPossibleValues(
+    this.arr.map(function(val){
+      return val.possibleValues();
+    })
+  );
+};
+
 ArrayLit.prototype.toString = function() {
   var join = function(vals) { return vals.join(","); };
   return "ArrayLit" + str(this.arr);
@@ -1201,6 +1258,36 @@ ObjectLit.prototype.staticValue = function() {
   }
   return Just(obj);
 };
+
+ObjectLit.prototype.possibleValues = function() {
+  var props = this.props;
+  var rv = [];
+
+  var valuePossibilities = expandPossibleValues(
+      this.props.map(function(prop) { return prop[1].possibleValues(); }));
+
+  for (var i=0; i<valuePossibilities.length; i++) {
+    var possibilityValues = valuePossibilities[i];
+    var obj = {};
+    var empty = true;
+    for (var propi=0; propi<this.props.length; propi++) {
+      var key = props[propi][0];
+      if (key instanceof Id) {
+        key = key.name;
+      } else {
+        continue;
+      }
+      var v = possibilityValues[propi];
+      if (v !== undefined) {
+        obj[key] = v;
+        empty = false;
+      }
+    }
+    if(!empty) rv.push(obj);
+  }
+  return rv;
+};
+
 ObjectLit.prototype.toString = function() { return "ObjectLit(" + str(this.props) + ")"; };
 
 

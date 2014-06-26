@@ -225,7 +225,9 @@ function findDependencies(sources, settings) {
 
     if (modules .. object.hasOwn(resolved.path)) {
       logging.debug("(already processed)");
-      return modules[resolved.path];
+      module = modules[resolved.path];
+      if (module.ignore) return null;
+      return null;
     }
     logging.verbose("Resolved: ", resolved);
     module.path = resolved.path;
@@ -275,11 +277,13 @@ function findDependencies(sources, settings) {
     var docs = docutil.parseModuleDocs(src);
     if(docs.hostenv === 'nodejs') {
       logging.verbose("Dropping nodejs module " + module.id);
+      module.ignore = true;
       return null;
     }
     if (docs['bundle-exclude'] === 'true') {
       if(!requireName .. matchesAnyPattern(settings.include)) {
         logging.info("Skipping @bundle-exclude module #{module.id} (use --include to override)");
+        module.ignore = true;
         return null;
       }
     }
@@ -363,13 +367,6 @@ function findDependencies(sources, settings) {
     if (!settings.strip) path = [];
     if (!parent) path = [];
     var property = path.length == 0 ? null : path[0];
-
-    module.required = true;
-    if (property === false) {
-      // don't do anything more than including the empty module
-      logging.verbose("including empty module: ", module.id);
-      return;
-    }
     if (module.exports .. seq.hasElem(property)) {
       // already processed
       return;
@@ -381,6 +378,12 @@ function findDependencies(sources, settings) {
       logging.debug("Adding dependency on #{module.id} (toplevel)");
     }
 
+    module.required = true;
+    if (property === false) {
+      // don't do anything more than including the empty module
+      logging.verbose("including empty module: ", module.id);
+      return;
+    }
 
     module.exports.push(property);
     addModuleAnnotations(module, property);
@@ -416,21 +419,27 @@ function findDependencies(sources, settings) {
       mods = [mods];
     }
 
-    return mods .. seq.map(function(mod) {
+    var rv = [];
+    mods .. seq.each {|mod|
+      if(!mod) continue;
       var id = mod;
       var name = null;
 
       if (typeof(id) !== 'string') {
         id = mod.id;
-        if (!id) throw new Error("require() argument without \`id\`: " + JSON.stringify(mod));
+        if (!id) {
+          logging.warn("require() argument without \`id\`: " + JSON.stringify(mod));
+          continue;
+        }
         name = mod.name || null;
       }
 
-      return {
+      rv.push({
         id: id,
         name: name,
-      };
-    });
+      });
+    };
+    return rv;
   }
 
   function addModuleDependency(module, moduleDep, prefix) {
@@ -569,6 +578,7 @@ function findDependencies(sources, settings) {
   modules .. object.ownValues .. seq.each {|mod|
     var stmts = mod.stmts;
     delete mod.stmts;
+    delete mod.requireAnnotations;
 
     if (!settings.strip) continue;
 
@@ -889,7 +899,7 @@ exports.create = function(opts) {
   if (opts.dump)
     return deps;
 
-  logging.debug("found dependencies:\n" + JSON.stringify(deps, null, "  "));
+  logging.verbose("got dependencies:\n" + JSON.stringify(deps, null, "  "));
 
   var contents = generateBundle(deps, opts);
 
