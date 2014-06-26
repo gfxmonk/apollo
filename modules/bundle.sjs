@@ -292,24 +292,28 @@ function findDependencies(sources, settings) {
     }
 
     if(docs.require) {
+      var trimAll = a -> a .. seq.map(s -> s.trim());
       function addRequireAnnotations(exportScope, annotations) {
         if (!annotations) return;
         logging.info("Adding require annotations: ", annotations);
         annotations .. seq.each {|req|
-          var [name, paths] = req.split('#') .. seq.map(s -> s.trim());
-
-          if (paths) paths = paths.split(',') .. seq.map(s -> s.trim());
+          var [name, paths] = req.split('#') .. trimAll();
+          if (paths) paths = paths.split(',') .. trimAll();
           else paths = [null];
 
-          if (!module.requireAnnotations[exportScope]) {
-            module.requireAnnotations[exportScope] = [];
+          var scopeAnnotations = module.requireAnnotations
+            .. seq.find([k,v] -> k == exportScope, null);
+
+          if (!scopeAnnotations) {
+            scopeAnnotations = [exportScope, []];
+            module.requireAnnotations.push(scopeAnnotations);
           }
 
           paths .. seq.each {|path|
             if (path !== null) {
               path = path.split(".") .. seq.map(s -> s.trim());
             }
-            module.requireAnnotations[exportScope].push([name, path]);
+            scopeAnnotations[1].push([name, path]);
           }
         }
       }
@@ -327,7 +331,8 @@ function findDependencies(sources, settings) {
   }
 
   function addModuleAnnotations(mod, property) {
-    mod.requireAnnotations .. object.ownPropertyPairs .. seq.each { |[exportScope, annotations]|
+    console.log("Adding module annotations[#{property}] from ", mod.requireAnnotations);
+    mod.requireAnnotations .. seq.each { |[exportScope, annotations]|
       if (exportScope === null || exportScope === property) {
         annotations .. seq.each {| [name, path]|
           var depMod = loadModule(name, mod);
@@ -672,7 +677,7 @@ function generateBundle(deps, settings) {
       logging.verbose("Compiling: #{dep.path}");
       contents = compile(contents, dep.statementFilter);
       var minifiedSize = contents.length;
-      var percentage = ((minifiedSize/initialSize) * 100).toFixed(2);
+      var percentage = initialSize == 0 ? 0 : ((minifiedSize/initialSize) * 100).toFixed(2);
       logging.info("Bundled #{id} [#{percentage}%]");
 
       setContents(contents);
