@@ -387,6 +387,12 @@ function findDependencies(sources, settings) {
     module.exports.push(property);
     addModuleAnnotations(module, property);
 
+    if (module.transitive && (property || !settings.strip)) {
+      module.transitive .. seq.each {|dep|
+        addModuleDependency(module, dep, path);
+      }
+    }
+
     if (property) {
       module.stmts .. seq.each {|stmt|
         if (stmt.exportScope .. seq.hasElem(null) || stmt.exportScope .. seq.hasElem("exports.#{property}")) {
@@ -394,17 +400,13 @@ function findDependencies(sources, settings) {
           addStatement(module, stmt);
         }
       }
-      if (module.transitive) {
-        module.transitive .. seq.each {|dep|
-          addModuleDependency(module, dep, path);
-        }
-      }
-
     } else {
       if (settings.strip && parent) {
-        logging.warn(
-          "can't remove dead code from " + module.id +
-          " due to reference in " + parent.id);
+        if (module == parent) {
+          logging.info("Can't strip " + module.id + " (self-reference)");
+        } else {
+          logging.warn("Can't strip " + module.id + " due to reference in " + parent.id);
+        }
       }
       module.statementFilter = includeAllStatements;
       module.stmts .. seq.each(stmt -> addStatement(module, stmt));
@@ -700,7 +702,7 @@ function generateBundle(deps, settings) {
       contents = compile(contents, dep.statementFilter);
       var minifiedSize = contents.length;
       var percentage = initialSize == 0 ? 0 : ((minifiedSize/initialSize) * 100).toFixed(2);
-      logging.info("Bundled #{id} [#{percentage}%]");
+      logging.info("Bundled #{id} [#{minifiedSize}b, #{percentage}%]");
 
       setContents(contents);
     }.bind(this);
