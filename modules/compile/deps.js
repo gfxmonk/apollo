@@ -335,7 +335,7 @@ var str = function(obj) {
     }
     return "{" + pairs.join(", ") + "}";
   }
-  if (Object.hasOwnProperty.call(obj, 'toString') || typeof(obj.toString) !== 'function') {
+  if (typeof(obj.toString) !== 'function') {
     return "[Object object]"; // ugh...
   }
   return String(obj);
@@ -1226,7 +1226,7 @@ function add_stmt(stmt, pctx) {
       return;
     }
 
-    if (stmt instanceof MultipleStatements || stmt instanceof Block) {
+    if (stmt instanceof MultipleStatements || BlockProto.isPrototypeOf(stmt)) {
       DEP_LOG("add_stmt expanding MultipleStatements: " + stmt);
       stmt = stmt.stmts;
     }
@@ -1242,6 +1242,7 @@ function add_stmt(stmt, pctx) {
       return;
     }
     if (top) {
+      DEP_LOG("TOPLEVEL STMT: " + stmt);
       var container = pctx.current_stmt;
       container.set(stmt);
       scope.convert_unused_identifiers_into_references();
@@ -1297,7 +1298,6 @@ function add_stmt(stmt, pctx) {
       }
 
       stmt = container;
-      DEP_LOG("TOPLEVEL STMT: " + stmt);
 
       if (stmt.exportScope === undefined) {
         // all toplevel statements have a global exportScope by default
